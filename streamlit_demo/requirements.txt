@@ -1,0 +1,24 @@
+# CurioScan Streamlit Demo Requirements
+
+# Core Streamlit
+streamlit>=1.28.0
+streamlit-option-menu>=0.3.6
+
+# Data manipulation and visualization
+pandas>=2.0.0
+numpy>=1.24.0
+plotly>=5.15.0
+
+# Image processing
+Pillow>=10.0.0
+opencv-python>=4.8.0
+
+# HTTP requests
+requests>=2.31.0
+
+# File handling
+python-multipart>=0.0.6
+
+# Utilities
+python-dateutil>=2.8.2
+pytz>=2023.3

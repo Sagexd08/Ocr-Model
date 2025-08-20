@@ -1,0 +1,236 @@
+# CurioScan Demo Configuration
+
+# Model Configuration
+model:
+  renderer_classifier:
+    name: "efficientnet_b0"
+    num_classes: 8
+    input_size: [224, 224]
+    pretrained: true
+    
+  ocr_models:
+    tesseract:
+      enabled: true
+      config: "--oem 3 --psm 6"
+      languages: ["eng"]
+    
+    easyocr:
+      enabled: true
+      languages: ["en"]
+      gpu: true
+    
+    layoutlm:
+      enabled: false  # Requires additional setup
+      model_name: "microsoft/layoutlmv3-base"
+    
+    trocr:
+      enabled: false  # Requires additional setup
+      model_name: "microsoft/trocr-base-printed"
+
+  table_detection:
+    model_type: "detectron2"
+    config_file: "COCO-Detection/faster_rcnn_R_50_FPN_3x.yaml"
+    weights_url: "detectron2://COCO-Detection/faster_rcnn_R_50_FPN_3x/137849458/model_final_280758.pkl"
+    confidence_threshold: 0.7
+
+# Training Configuration
+training:
+  batch_size: 16
+  learning_rate: 0.001
+  num_epochs: 50
+  optimizer: "adamw"
+  scheduler: "cosine"
+  weight_decay: 0.01
+  
+  # Data augmentation
+  augmentation:
+    enabled: true
+    rotation_range: 5
+    brightness_range: [0.8, 1.2]
+    contrast_range: [0.8, 1.2]
+    blur_probability: 0.1
+    noise_probability: 0.1
+    
+  # Distributed training
+  distributed:
+    enabled: false
+    backend: "nccl"
+    world_size: 1
+    
+  # Mixed precision
+  amp:
+    enabled: true
+    
+  # Checkpointing
+  checkpoint:
+    save_every: 5
+    keep_last: 3
+    
+# Data Configuration
+data:
+  train_split: 0.8
+  val_split: 0.1
+  test_split: 0.1
+  
+  # Data paths
+  paths:
+    train_data: "data/train"
+    val_data: "data/val"
+    test_data: "data/test"
+    annotations: "data/annotations"
+    
+  # Preprocessing
+  preprocessing:
+    resize_images: true
+    target_size: [1024, 1024]
+    normalize: true
+    mean: [0.485, 0.456, 0.406]
+    std: [0.229, 0.224, 0.225]
+
+# Processing Configuration
+processing:
+  # Confidence thresholds
+  confidence_thresholds:
+    ocr_token: 0.8
+    table_cell: 0.7
+    region_detection: 0.6
+    
+  # Preprocessing steps
+  preprocessing:
+    deskew: true
+    denoise: true
+    binarize: true
+    perspective_correction: true
+    
+  # Postprocessing
+  postprocessing:
+    spell_check: false
+    grammar_check: false
+    llm_normalization: false  # Disabled by default
+    
+  # Table reconstruction
+  table_reconstruction:
+    merge_threshold: 0.1
+    split_threshold: 0.05
+    min_cell_area: 100
+
+# API Configuration
+api:
+  host: "0.0.0.0"
+  port: 8000
+  workers: 4
+  timeout: 300
+  max_file_size: 50  # MB
+  
+  # Rate limiting
+  rate_limit:
+    enabled: true
+    requests_per_minute: 60
+    
+  # CORS
+  cors:
+    enabled: true
+    origins: ["*"]
+    
+# Worker Configuration
+worker:
+  concurrency: 4
+  max_retries: 3
+  retry_delay: 60  # seconds
+  task_timeout: 600  # seconds
+  
+  # Queue configuration
+  queues:
+    default: "default"
+    high_priority: "high"
+    low_priority: "low"
+
+# Storage Configuration
+storage:
+  type: "minio"  # or "s3", "local"
+  
+  minio:
+    endpoint: "localhost:9000"
+    access_key: "minioadmin"
+    secret_key: "minioadmin123"
+    secure: false
+    bucket_name: "curioscan"
+    
+  s3:
+    region: "us-east-1"
+    bucket_name: "curioscan-prod"
+    
+  local:
+    base_path: "data/storage"
+
+# Database Configuration
+database:
+  url: "postgresql://curioscan:curioscan123@localhost:5432/curioscan"
+  pool_size: 10
+  max_overflow: 20
+  echo: false
+
+# Redis Configuration
+redis:
+  url: "redis://localhost:6379/0"
+  max_connections: 20
+
+# Monitoring Configuration
+monitoring:
+  prometheus:
+    enabled: true
+    port: 8001
+    
+  logging:
+    level: "INFO"
+    format: "json"
+    
+  metrics:
+    track_performance: true
+    track_accuracy: true
+    track_errors: true
+
+# Security Configuration
+security:
+  api_key_required: false
+  jwt_secret: "your-secret-key-here"
+  token_expiry: 3600  # seconds
+  
+  # PII detection
+  pii_detection:
+    enabled: false
+    redact_emails: true
+    redact_phones: true
+    redact_ssn: true
+
+# LLM Configuration (Optional)
+llm:
+  enabled: false
+  provider: "openai"  # or "anthropic", "local"
+  
+  openai:
+    api_key: ""
+    model: "gpt-3.5-turbo"
+    
+  local:
+    model_path: "models/llama2-7b"
+    
+  system_prompt: |
+    You are a strict normalizer. Input: OCR tokens with bbox and confidence. 
+    Output: JSON matching the schema. Do not invent missing values. 
+    If unsure, set needs_review=true. Output JSON only.
+
+# Evaluation Configuration
+evaluation:
+  metrics:
+    - "token_f1"
+    - "region_map"
+    - "table_accuracy"
+    - "end_to_end_accuracy"
+    
+  thresholds:
+    digital_pdf_f1: 0.99
+    scanned_page_f1: 0.98
+    table_reconstruction: 0.95
+    
+  output_format: "pdf"  # or "html", "json"
