@@ -17,7 +17,7 @@ class CurioScanAPIClient:
         self.session = requests.Session()
         self.session.headers.update({
             "Content-Type": "application/json",
-            "User-Agent": "CurioScan-Streamlit-Demo/1.0"
+            "User-Agent": "CurioScan-Streamlit-Demo/2.0.0"
         })
     
     def upload_file(self, file, confidence_threshold: float = 0.8) -> str:

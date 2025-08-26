@@ -48,7 +48,7 @@ class WebhookSender:
         
         self._send_webhooks(payload)
     
-    def send_job_progress(self, job_id: str, progress: float, message: str = None):
+    def send_job_progress(self, job_id: str, progress: float, message: Optional[str] = None):
         """Send job progress webhook."""
         payload = {
             "event": "job.progress",
@@ -62,7 +62,7 @@ class WebhookSender:
         
         self._send_webhooks(payload)
     
-    def send_job_completed(self, job_id: str, results: Dict[str, Any]):
+    def send_job_completed(self, job_id: str, results: Dict[str, Any]) -> None:
         """Send job completed webhook."""
         payload = {
             "event": "job.completed",
@@ -119,12 +119,10 @@ class WebhookSender:
                 url,
                 json=payload,
                 headers=headers,
-                timeout=self.timeout
             )
             
             response.raise_for_status()
             
-            logger.info(f"Webhook sent successfully to {url}")
             return True
             
         except requests.exceptions.RequestException as e:
@@ -137,7 +135,6 @@ class WebhookSender:
     def _send_webhooks(self, payload: Dict[str, Any]):
         """Send webhook to all registered endpoints."""
         try:
-            # Get registered webhooks from database
             webhooks = self._get_registered_webhooks(payload["event"])
             
             for webhook in webhooks:
@@ -148,7 +145,6 @@ class WebhookSender:
                         webhook.get("secret")
                     )
                     
-                    # Update webhook statistics
                     self._update_webhook_stats(webhook["webhook_id"], success)
                     
                 except Exception as e:
@@ -161,7 +157,6 @@ class WebhookSender:
     def _get_registered_webhooks(self, event: str) -> List[Dict[str, Any]]:
         """Get registered webhooks for an event."""
         try:
-            # Import here to avoid circular imports
             import sys
             from pathlib import Path
             project_root = Path(__file__).parent.parent

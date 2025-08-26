@@ -1,0 +1,11 @@
+celery
+redis
+pdfplumber
+Pillow
+timm
+torch
+transformers
+minio
+sqlalchemy
+python-docx
+scikit-image

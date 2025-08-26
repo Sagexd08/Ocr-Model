@@ -1,634 +1,620 @@
 """
-CurioScan Streamlit Demo Application
-
-Main application file with elegant, bold UI and card-based layout.
+CurioScan OCR - Production-ready Streamlit Demo Application
 """
-
 import streamlit as st
-import requests
-import json
 import time
+import os
+import datetime
+import json
+from pathlib import Path
 import pandas as pd
-import plotly.express as px
-import plotly.graph_objects as go
-from PIL import Image
+import numpy as np
 import io
 import base64
-from typing import Dict, Any, List, Optional
+import requests
+from PIL import Image
+import plotly.express as px
+from typing import Dict, Any, List, Optional, Tuple, Union
+import logging
+import uuid
+import tempfile
+import sys
+from streamlit.elements import image as st_image
 
-# Configure page
-st.set_page_config(
-    page_title="CurioScan - Production OCR System",
-    page_icon="🔍",
-    layout="wide",
-    initial_sidebar_state="expanded"
-)
-
-# Import custom components
+# Import components
 try:
-    from components.ui_components import (
-        render_header, render_sidebar, render_upload_card,
-        render_pipeline_status, render_results_viewer,
-        render_training_dashboard, render_export_options
-    )
-    from components.api_client import CurioScanAPIClient
-    from components.visualization import (
-        render_ocr_overlay, render_table_editor,
-        render_provenance_inspector, render_confidence_heatmap
+    # Try relative imports
+    from .components.api_client import CurioScanAPIClient
+    from .components.visualization import (
+        visualize_document_image,
+        visualize_text_regions, 
+        visualize_table_regions,
+        create_form_field_visualization,
+        create_analytics_dashboard
     )
 except ImportError:
-    # Fallback if components not available
-    pass
+    # Fall back to direct imports
+    from components.api_client import CurioScanAPIClient
+    from components.visualization import (
+        visualize_document_image,
+        visualize_text_regions, 
+        visualize_table_regions,
+        create_form_field_visualization,
+        create_analytics_dashboard
+    )
 
-# Initialize session state
-if 'api_client' not in st.session_state:
-    api_base_url = st.secrets.get("API_BASE_URL", "http://localhost:8000") if hasattr(st, 'secrets') else "http://localhost:8000"
-    try:
-        st.session_state.api_client = CurioScanAPIClient(api_base_url)
-    except:
-        st.session_state.api_client = None
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger(__name__)
 
-if 'current_job' not in st.session_state:
-    st.session_state.current_job = None
+# Config and environment variables
+API_URL = os.environ.get("CURIOSCAN_API_URL", "http://localhost:8000")
+DEMO_MODE = os.environ.get("DEMO_MODE", "false").lower() == "true"
+MAX_FILE_SIZE_MB = int(os.environ.get("MAX_FILE_SIZE_MB", "50"))
+ENABLE_ANALYTICS = os.environ.get("ENABLE_ANALYTICS", "true").lower() == "true"
+CACHE_DIR = os.environ.get("CACHE_DIR", "./.streamlit/cache")
 
-if 'processing_results' not in st.session_state:
-    st.session_state.processing_results = None
+# Initialize API client
+api_client = CurioScanAPIClient(base_url=API_URL)
 
-if 'selected_page' not in st.session_state:
-    st.session_state.selected_page = 1
+# Create cache directory if it doesn't exist
+os.makedirs(CACHE_DIR, exist_ok=True)
 
-if 'overlay_mode' not in st.session_state:
-    st.session_state.overlay_mode = "bboxes"
+# Set page configuration
+st.set_page_config(
+    page_title="CurioScan OCR - Intelligent Document Processing",
+    page_icon="📄",
+    layout="wide",
+    initial_sidebar_state="expanded",
+    menu_items={
+        'About': """
+        # CurioScan OCR
+        Intelligent Document Processing System
+        
+        Version: 2.0.0 (August 2025)
+        """
+    }
+)
 
-# Custom CSS for elegant styling
+# Session state initialization
+if 'jobs' not in st.session_state:
+    st.session_state.jobs = []
+if 'current_job_id' not in st.session_state:
+    st.session_state.current_job_id = None
+if 'api_settings' not in st.session_state:
+    st.session_state.api_settings = {
+        'api_url': API_URL,
+        'confidence_threshold': 0.8,
+        'include_provenance': True
+    }
+if 'analytics' not in st.session_state:
+    st.session_state.analytics = {
+        'processed_docs': 0,
+        'successful_docs': 0,
+        'failed_docs': 0,
+        'total_pages': 0,
+        'avg_processing_time': 0
+    }
+
+# Custom CSS
 st.markdown("""
 <style>
     .main-header {
-        background: linear-gradient(90deg, #667eea 0%, #764ba2 100%);
-        padding: 2rem;
+        font-size: 2.5rem !important;
+        font-weight: 600 !important;
+    }
+    .subheader {
+        font-size: 1.5rem !important;
+        font-weight: 500 !important;
+    }
+    .info-box {
+        background-color: #f0f2f6;
         border-radius: 10px;
-        margin-bottom: 2rem;
-        color: white;
-        text-align: center;
+        padding: 20px;
+        margin: 10px 0px;
     }
-    
-    .card {
-        background: white;
-        padding: 1.5rem;
+    .success-box {
+        background-color: #d0f0d3;
         border-radius: 10px;
-        box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
-        margin-bottom: 1rem;
-        border-left: 4px solid #667eea;
+        padding: 20px;
+        margin: 10px 0px;
     }
-    
-    .metric-card {
-        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-        color: white;
-        padding: 1rem;
-        border-radius: 8px;
-        text-align: center;
-        margin: 0.5rem;
+    .error-box {
+        background-color: #f9d6d6;
+        border-radius: 10px;
+        padding: 20px;
+        margin: 10px 0px;
     }
-    
-    .status-indicator {
-        display: inline-block;
-        width: 12px;
-        height: 12px;
-        border-radius: 50%;
-        margin-right: 8px;
+    .stButton>button {
+        width: 100%;
     }
-    
-    .status-pending { background-color: #ffc107; }
-    .status-processing { background-color: #17a2b8; }
-    .status-completed { background-color: #28a745; }
-    .status-failed { background-color: #dc3545; }
-    
-    .pipeline-step {
-        background: #f8f9fa;
-        border: 2px solid #e9ecef;
-        border-radius: 8px;
-        padding: 1rem;
-        margin: 0.5rem 0;
-        transition: all 0.3s ease;
+    /* Data table styling */
+    .dataframe {
+        width: 100% !important;
     }
-    
-    .pipeline-step.active {
-        border-color: #667eea;
-        background: #e7f3ff;
+    /* Job list styling */
+    .job-list-item {
+        padding: 10px;
+        margin-bottom: 5px;
+        border-radius: 5px;
+        cursor: pointer;
     }
-    
-    .pipeline-step.completed {
-        border-color: #28a745;
-        background: #d4edda;
+    .job-list-item:hover {
+        background-color: #f0f2f6;
     }
-    
-    .confidence-high { color: #28a745; font-weight: bold; }
-    .confidence-medium { color: #ffc107; font-weight: bold; }
-    .confidence-low { color: #dc3545; font-weight: bold; }
+    .selected-job {
+        background-color: #d0f0d3 !important;
+    }
 </style>
 """, unsafe_allow_html=True)
 
+# App header
+st.markdown('<h1 class="main-header">📄 CurioScan OCR</h1>', unsafe_allow_html=True)
+st.markdown('<h2 class="subheader">Intelligent Document Processing</h2>', unsafe_allow_html=True)
+    
+# Create main layout with sidebar
+sidebar = st.sidebar
+main_area = st
 
-def main():
-    """Main application function."""
+# Sidebar content
+with sidebar:
+    st.header("📁 Upload Document")
     
-    # Render header
-    render_header()
+    # File uploader
+    uploaded_file = st.file_uploader(
+        "Choose a document to process", 
+        type=["pdf", "png", "jpg", "jpeg", "tiff", "docx", "xlsx", "txt"],
+        help="Supported formats: PDF, images (PNG, JPG, TIFF), MS Office (DOCX, XLSX), and plain text"
+    )
     
-    # Sidebar navigation
-    page = render_sidebar()
+    # Processing options
+    st.header("⚙️ Processing Options")
     
-    # Main content area
-    if page == "Upload & Process":
-        render_upload_page()
-    elif page == "Results Viewer":
-        render_results_page()
-    elif page == "Training Dashboard":
-        render_training_page()
-    elif page == "Settings":
-        render_settings_page()
-
-
-def render_upload_page():
-    """Render the upload and processing page."""
-    
-    col1, col2 = st.columns([1, 2])
-    
-    with col1:
-        st.markdown("### 📤 Upload Document")
-        
-        # Upload card
-        uploaded_file = st.file_uploader(
-            "Choose a document",
-            type=['pdf', 'png', 'jpg', 'jpeg', 'tiff', 'docx'],
-            help="Supported formats: PDF, Images (PNG, JPG, TIFF), DOCX"
+    with st.expander("OCR Settings", expanded=False):
+        ocr_mode = st.selectbox(
+            "OCR Mode",
+            options=["Auto", "Force OCR", "Native Text Only", "Legacy"],
+            help="Auto: Let system decide best approach\nForce OCR: Always use OCR\nNative Text: Extract embedded text when possible\nLegacy: Use previous OCR engine"
         )
         
-        # Processing options
-        st.markdown("### ⚙️ Processing Options")
         confidence_threshold = st.slider(
             "Confidence Threshold",
             min_value=0.0,
             max_value=1.0,
             value=0.8,
             step=0.05,
-            help="Minimum confidence for OCR results"
+            help="Set minimum confidence threshold for text extraction"
+        )
+    
+    with st.expander("Advanced Features", expanded=False):
+        extract_tables = st.checkbox("Detect and extract tables", value=True)
+        extract_forms = st.checkbox("Detect and extract form fields", value=True)
+        analyze_layout = st.checkbox("Analyze document layout", value=True)
+        detect_language = st.checkbox("Detect language", value=True)
+        
+    with st.expander("Export Options", expanded=False):
+        output_formats = st.multiselect(
+            "Output Formats",
+            options=["JSON", "CSV", "Excel", "Text"],
+            default=["JSON", "CSV"],
+            help="Select output formats for results"
         )
         
-        # Process button
-        if uploaded_file is not None:
-            if st.button("🚀 Start Processing", type="primary", use_container_width=True):
-                process_document(uploaded_file, confidence_threshold)
-        
-        # Pipeline status
-        if st.session_state.current_job:
-            render_pipeline_status_card()
-    
-    with col2:
-        st.markdown("### 📊 Live Preview")
-        
-        if uploaded_file is not None:
-            # Display uploaded file
-            if uploaded_file.type.startswith('image/'):
-                image = Image.open(uploaded_file)
-                st.image(image, caption="Uploaded Document", use_column_width=True)
-            elif uploaded_file.type == 'application/pdf':
-                st.info("📄 PDF uploaded. Preview will be available after processing.")
-            else:
-                st.info("📄 Document uploaded. Preview will be available after processing.")
-        else:
-            st.info("👆 Upload a document to see preview")
-
-
-def render_results_page():
-    """Render the results viewing page."""
-    
-    if not st.session_state.processing_results:
-        st.warning("No processing results available. Please upload and process a document first.")
-        return
-    
-    # Results header
-    st.markdown("### 📋 Processing Results")
-    
-    results = st.session_state.processing_results
-    
-    # Metrics row
-    col1, col2, col3, col4 = st.columns(4)
-    
-    with col1:
-        st.markdown(f"""
-        <div class="metric-card">
-            <h3>{len(results.get('rows', []))}</h3>
-            <p>Total Rows</p>
-        </div>
-        """, unsafe_allow_html=True)
-    
-    with col2:
-        confidence = results.get('confidence_score', 0.0)
-        st.markdown(f"""
-        <div class="metric-card">
-            <h3>{confidence:.1%}</h3>
-            <p>Avg Confidence</p>
-        </div>
-        """, unsafe_allow_html=True)
-    
-    with col3:
-        review_count = sum(1 for row in results.get('rows', []) if row.get('needs_review', False))
-        st.markdown(f"""
-        <div class="metric-card">
-            <h3>{review_count}</h3>
-            <p>Need Review</p>
-        </div>
-        """, unsafe_allow_html=True)
-    
-    with col4:
-        render_type = results.get('render_type', 'unknown')
-        st.markdown(f"""
-        <div class="metric-card">
-            <h3>{render_type.title()}</h3>
-            <p>Document Type</p>
-        </div>
-        """, unsafe_allow_html=True)
-    
-    # Main results area
-    tab1, tab2, tab3, tab4 = st.tabs(["📄 OCR Overlay", "📊 Table View", "🔍 Provenance", "📈 Export"])
-    
-    with tab1:
-        render_ocr_overlay_tab()
-    
-    with tab2:
-        render_table_view_tab()
-    
-    with tab3:
-        render_provenance_tab()
-    
-    with tab4:
-        render_export_tab()
-
-
-def render_training_page():
-    """Render the training dashboard page."""
-    
-    st.markdown("### 🎯 Training Dashboard")
-    
-    # Training metrics
-    col1, col2 = st.columns([2, 1])
-    
-    with col1:
-        # Mock training data for demo
-        epochs = list(range(1, 21))
-        train_loss = [0.8 - 0.03 * i + 0.01 * (i % 3) for i in epochs]
-        val_loss = [0.85 - 0.025 * i + 0.015 * (i % 4) for i in epochs]
-        
-        fig = go.Figure()
-        fig.add_trace(go.Scatter(x=epochs, y=train_loss, name="Training Loss", line=dict(color="#667eea")))
-        fig.add_trace(go.Scatter(x=epochs, y=val_loss, name="Validation Loss", line=dict(color="#764ba2")))
-        
-        fig.update_layout(
-            title="Training Progress",
-            xaxis_title="Epoch",
-            yaxis_title="Loss",
-            template="plotly_white"
+        include_provenance = st.checkbox(
+            "Include data provenance", 
+            value=True,
+            help="Include detailed information about text positions and confidence"
         )
-        
-        st.plotly_chart(fig, use_container_width=True)
     
-    with col2:
-        st.markdown("#### 🎛️ Training Controls")
+    # Job history
+    st.header("📋 Recent Jobs")
+    
+    if st.session_state.jobs:
+        for i, job in enumerate(st.session_state.jobs):
+            job_status = job.get('status', 'UNKNOWN')
+            status_color = {
+                'COMPLETED': '🟢',
+                'PROCESSING': '🟡',
+                'FAILED': '🔴',
+                'UNKNOWN': '⚪'
+            }.get(job_status, '⚪')
+            
+            # Format timestamp
+            timestamp = job.get('timestamp', datetime.datetime.now())
+            if isinstance(timestamp, str):
+                try:
+                    timestamp = datetime.datetime.fromisoformat(timestamp)
+                except:
+                    timestamp = datetime.datetime.now()
+            
+            time_str = timestamp.strftime("%H:%M:%S")
+            
+            # Job item with click handler
+            is_selected = st.session_state.current_job_id == job.get('job_id')
+            job_class = "job-list-item " + ("selected-job" if is_selected else "")
+            
+            job_html = f"""
+            <div class="{job_class}" onclick="handleJobClick('{job.get('job_id')}')">
+                {status_color} {job.get('filename', 'Unknown')} ({time_str})
+            </div>
+            """
+            
+            if st.markdown(job_html, unsafe_allow_html=True):
+                st.session_state.current_job_id = job.get('job_id')
+    else:
+        st.info("No recent jobs")
+    
+    # Settings and About
+    st.header("⚙️ Settings")
+    
+    with st.expander("API Configuration", expanded=False):
+        api_url = st.text_input("API URL", value=st.session_state.api_settings['api_url'])
         
-        model_type = st.selectbox(
-            "Model Type",
-            ["renderer_classifier", "ocr_models", "table_detector", "layout_analyzer"]
-        )
-        
-        dataset_path = st.text_input("Dataset Path", value="data/corrected_extractions")
-        
-        dry_run = st.checkbox("Dry Run", value=True)
-        
-        if st.button("🚀 Start Retraining", type="primary", use_container_width=True):
-            trigger_retraining(model_type, dataset_path, dry_run)
-        
-        # Model checkpoints
-        st.markdown("#### 📦 Model Checkpoints")
-        
-        # Mock checkpoint data
-        checkpoints = [
-            {"version": "v1.2.3", "f1_score": 0.95, "active": True},
-            {"version": "v1.2.2", "f1_score": 0.93, "active": False},
-            {"version": "v1.2.1", "f1_score": 0.91, "active": False},
-        ]
-        
-        for checkpoint in checkpoints:
-            status = "🟢 Active" if checkpoint["active"] else "⚪ Inactive"
-            st.markdown(f"**{checkpoint['version']}** - F1: {checkpoint['f1_score']:.3f} - {status}")
+        if st.button("Save Settings"):
+            st.session_state.api_settings['api_url'] = api_url
+            st.success("Settings saved!")
 
-
-def render_settings_page():
-    """Render the settings page."""
-    
-    st.markdown("### ⚙️ Settings")
-    
-    col1, col2 = st.columns(2)
-    
-    with col1:
-        st.markdown("#### 🔧 Processing Settings")
+    # About section
+    with st.expander("About CurioScan", expanded=False):
+        st.write("""
+        **CurioScan OCR** is an advanced document processing system capable of extracting text, 
+        tables, and form fields from various document types.
         
-        st.slider("Default Confidence Threshold", 0.0, 1.0, 0.8, 0.05)
-        st.selectbox("Default OCR Engine", ["ensemble", "tesseract", "easyocr"])
-        st.checkbox("Enable Table Detection", value=True)
-        st.checkbox("Enable Layout Analysis", value=True)
-        
-    with col2:
-        st.markdown("#### 🎨 UI Settings")
-        
-        st.selectbox("Theme", ["Light", "Dark"])
-        st.checkbox("Show Confidence Scores", value=True)
-        st.checkbox("Auto-refresh Results", value=False)
-        st.slider("Refresh Interval (seconds)", 1, 30, 5)
+        **Version:** 2.0.0 (August 2025)
+        """)
 
-
-def process_document(uploaded_file, confidence_threshold):
-    """Process uploaded document."""
-    
+# Define the document processing function
+def process_document(file, options):
+    """Process a document and track progress"""
     try:
-        # Upload file
-        with st.spinner("Uploading document..."):
-            job_id = st.session_state.api_client.upload_file(uploaded_file, confidence_threshold)
-            st.session_state.current_job = job_id
-            st.success(f"Document uploaded! Job ID: {job_id}")
+        # Start processing timer
+        start_time = time.time()
         
-        # Poll for results
-        poll_for_results(job_id)
-        
-    except Exception as e:
-        st.error(f"Failed to process document: {str(e)}")
-
-
-def poll_for_results(job_id):
-    """Poll for processing results."""
-    
-    progress_bar = st.progress(0)
-    status_text = st.empty()
-    
-    while True:
-        try:
-            status = st.session_state.api_client.get_job_status(job_id)
+        # Show processing status
+        with st.status("Processing document...", expanded=True) as status:
+            st.write("Uploading file...")
             
-            progress = status.get('progress', 0.0)
-            job_status = status.get('status', 'unknown')
-            message = status.get('message', '')
+            # Upload file to API
+            job_id = api_client.upload_file(file, confidence_threshold=options['confidence_threshold'])
+            st.write(f"Processing job started with ID: {job_id}")
             
-            progress_bar.progress(progress)
-            status_text.text(f"Status: {job_status} - {message}")
+            # Monitor processing status
+            status_data = {"status": "STARTED", "progress": 0}
+            progress_bar = st.progress(0, "Starting document processing...")
             
-            if job_status == 'completed':
-                # Get results
-                results = st.session_state.api_client.get_job_results(job_id)
-                st.session_state.processing_results = results
-                st.success("Processing completed!")
-                break
-            elif job_status == 'failed':
-                st.error("Processing failed!")
-                break
+            while status_data.get("status") not in ["COMPLETED", "FAILED"]:
+                try:
+                    status_data = api_client.get_job_status(job_id)
+                    progress = status_data.get("progress", 0)
+                    current_status = status_data.get("status", "PROCESSING")
+                    
+                    # Update progress bar
+                    progress_bar.progress(
+                        progress / 100, 
+                        f"Processing: {current_status} ({progress}%)"
+                    )
+                    
+                    # Add more detailed status if available
+                    if "current_stage" in status_data:
+                        st.write(f"Current stage: {status_data['current_stage']}")
+                    
+                    time.sleep(0.5)
+                except Exception as e:
+                    st.error(f"Error checking status: {str(e)}")
+                    time.sleep(2)  # Longer delay on error
             
-            time.sleep(2)
+            # Process complete
+            processing_time = time.time() - start_time
             
-        except Exception as e:
-            st.error(f"Error polling status: {str(e)}")
-            break
-
-
-def render_pipeline_status_card():
-    """Render pipeline status card."""
-    
-    if not st.session_state.current_job:
-        return
-    
-    st.markdown("### 🔄 Pipeline Status")
-    
-    # Mock pipeline steps for demo
-    steps = [
-        {"name": "Document Classification", "status": "completed", "time": "0.5s"},
-        {"name": "Preprocessing", "status": "completed", "time": "1.2s"},
-        {"name": "OCR Extraction", "status": "processing", "time": "3.1s"},
-        {"name": "Table Detection", "status": "pending", "time": "-"},
-        {"name": "Postprocessing", "status": "pending", "time": "-"},
-    ]
-    
-    for step in steps:
-        status_class = f"status-{step['status']}"
-        step_class = "pipeline-step"
-        if step['status'] == 'processing':
-            step_class += " active"
-        elif step['status'] == 'completed':
-            step_class += " completed"
-        
-        st.markdown(f"""
-        <div class="{step_class}">
-            <span class="status-indicator {status_class}"></span>
-            <strong>{step['name']}</strong>
-            <span style="float: right;">{step['time']}</span>
-        </div>
-        """, unsafe_allow_html=True)
-
-
-def render_ocr_overlay_tab():
-    """Render OCR overlay visualization tab."""
-    
-    st.markdown("#### 📄 OCR Overlay Viewer")
-    
-    # Controls
-    col1, col2, col3 = st.columns(3)
-    
-    with col1:
-        overlay_mode = st.selectbox(
-            "Overlay Mode",
-            ["bboxes", "tokens", "confidence"],
-            index=0
-        )
-    
-    with col2:
-        page_num = st.number_input(
-            "Page Number",
-            min_value=1,
-            max_value=10,
-            value=1
-        )
-    
-    with col3:
-        confidence_filter = st.slider(
-            "Min Confidence",
-            0.0, 1.0, 0.0, 0.05
-        )
-    
-    # Placeholder for OCR overlay
-    st.info("📄 OCR overlay visualization would appear here with the selected page and overlay mode.")
-
-
-def render_table_view_tab():
-    """Render table view tab."""
-    
-    st.markdown("#### 📊 Interactive Table Editor")
-    
-    if not st.session_state.processing_results:
-        st.warning("No results to display")
-        return
-    
-    # Convert results to DataFrame
-    rows = st.session_state.processing_results.get('rows', [])
-    
-    if not rows:
-        st.warning("No table data found")
-        return
-    
-    # Create DataFrame from results
-    table_data = []
-    for row in rows:
-        row_data = {
-            'Row ID': row.get('row_id', ''),
-            'Page': row.get('page', 0),
-            'Region': row.get('region_id', ''),
-            'Confidence': row.get('provenance', {}).get('confidence', 0.0),
-            'Needs Review': row.get('needs_review', False)
-        }
-        
-        # Add column data
-        columns = row.get('columns', {})
-        for col_name, col_value in columns.items():
-            row_data[col_name] = col_value
-        
-        table_data.append(row_data)
-    
-    df = pd.DataFrame(table_data)
-    
-    # Display editable table
-    edited_df = st.data_editor(
-        df,
-        use_container_width=True,
-        num_rows="dynamic",
-        column_config={
-            "Confidence": st.column_config.ProgressColumn(
-                "Confidence",
-                help="OCR confidence score",
-                min_value=0.0,
-                max_value=1.0,
-            ),
-            "Needs Review": st.column_config.CheckboxColumn(
-                "Needs Review",
-                help="Requires human review",
-            )
-        }
-    )
-    
-    # Save changes button
-    if st.button("💾 Save Changes", type="primary"):
-        st.success("Changes saved successfully!")
-
-
-def render_provenance_tab():
-    """Render provenance inspector tab."""
-    
-    st.markdown("#### 🔍 Provenance Inspector")
-    
-    # Mock provenance data
-    st.markdown("""
-    **Click on any cell in the table view to see detailed provenance information:**
-    
-    - **Source File**: document.pdf
-    - **Page**: 1
-    - **Bounding Box**: [123, 456, 789, 012]
-    - **Token IDs**: [45, 46, 47, 48]
-    - **OCR Confidence**: 0.92
-    - **Model Used**: ensemble
-    - **Processing Time**: 2.3s
-    """)
-    
-    # Placeholder for provenance visualization
-    st.info("🔍 Detailed provenance information and source highlighting would appear here.")
-
-
-def render_export_tab():
-    """Render export options tab."""
-    
-    st.markdown("#### 📈 Export Options")
-    
-    if not st.session_state.processing_results:
-        st.warning("No results to export")
-        return
-    
-    col1, col2 = st.columns(2)
-    
-    with col1:
-        st.markdown("##### Export Formats")
-        
-        export_format = st.selectbox(
-            "Format",
-            ["JSON", "CSV", "XLSX", "Provenance ZIP"]
-        )
-        
-        include_provenance = st.checkbox("Include Provenance", value=True)
-        include_confidence = st.checkbox("Include Confidence Scores", value=True)
-        
-        if st.button("📥 Download", type="primary", use_container_width=True):
-            download_results(export_format, include_provenance, include_confidence)
-    
-    with col2:
-        st.markdown("##### Export Preview")
-        
-        # Show preview based on format
-        if export_format == "JSON":
-            st.json(st.session_state.processing_results)
-        elif export_format in ["CSV", "XLSX"]:
-            # Convert to DataFrame for preview
-            rows = st.session_state.processing_results.get('rows', [])
-            if rows:
-                preview_data = []
-                for row in rows[:5]:  # Show first 5 rows
-                    row_data = row.get('columns', {})
-                    row_data['confidence'] = row.get('provenance', {}).get('confidence', 0.0)
-                    preview_data.append(row_data)
+            # Update status
+            if status_data.get("status") == "COMPLETED":
+                status.update(label="Processing complete!", state="complete")
+                progress_bar.progress(100, "Processing complete")
                 
-                df = pd.DataFrame(preview_data)
-                st.dataframe(df, use_container_width=True)
-
-
-def download_results(format_type, include_provenance, include_confidence):
-    """Download results in specified format."""
-    
-    try:
-        job_id = st.session_state.current_job
-        if not job_id:
-            st.error("No job ID available")
-            return
-        
-        # Get download URL from API
-        download_url = st.session_state.api_client.get_download_url(
-            job_id, format_type.lower(), include_provenance
-        )
-        
-        st.success(f"Download started! Format: {format_type}")
-        st.markdown(f"[📥 Download Link]({download_url})")
-        
+                # Update analytics
+                st.session_state.analytics['processed_docs'] += 1
+                st.session_state.analytics['successful_docs'] += 1
+                st.session_state.analytics['avg_processing_time'] = (
+                    (st.session_state.analytics['avg_processing_time'] * 
+                     (st.session_state.analytics['successful_docs'] - 1) + 
+                     processing_time) / 
+                    st.session_state.analytics['successful_docs']
+                )
+                
+                # Add job to history
+                job_info = {
+                    'job_id': job_id,
+                    'filename': file.name,
+                    'status': 'COMPLETED',
+                    'timestamp': datetime.datetime.now(),
+                    'processing_time': processing_time
+                }
+                st.session_state.jobs.insert(0, job_info)
+                st.session_state.current_job_id = job_id
+                
+                return job_id, True
+            else:
+                status.update(label=f"Processing failed: {status_data.get('error', 'Unknown error')}", state="error")
+                progress_bar.empty()
+                
+                # Update analytics
+                st.session_state.analytics['processed_docs'] += 1
+                st.session_state.analytics['failed_docs'] += 1
+                
+                # Add job to history
+                job_info = {
+                    'job_id': job_id,
+                    'filename': file.name,
+                    'status': 'FAILED',
+                    'timestamp': datetime.datetime.now(),
+                    'error': status_data.get('error', 'Unknown error')
+                }
+                st.session_state.jobs.insert(0, job_info)
+                
+                return job_id, False
     except Exception as e:
-        st.error(f"Download failed: {str(e)}")
+        st.error(f"Error processing document: {str(e)}")
+        return None, False
 
-
-def trigger_retraining(model_type, dataset_path, dry_run):
-    """Trigger model retraining."""
+# Main area content
+if uploaded_file is not None:
+    # Prepare processing options
+    processing_options = {
+        'ocr_mode': ocr_mode.upper().replace(' ', '_'),
+        'confidence_threshold': confidence_threshold,
+        'extract_tables': extract_tables,
+        'extract_forms': extract_forms,
+        'analyze_layout': analyze_layout,
+        'detect_language': detect_language,
+        'output_formats': [fmt.lower() for fmt in output_formats],
+        'include_provenance': include_provenance
+    }
     
+    # Process the document
+    job_id, success = process_document(uploaded_file, processing_options)
+    
+    if success:
+        st.success(f"Document processed successfully! Job ID: {job_id}")
+
+# If we have a selected job, display results
+if st.session_state.current_job_id:
     try:
-        result = st.session_state.api_client.trigger_retraining(
-            model_type, dataset_path, {}, dry_run
-        )
+        job_id = st.session_state.current_job_id
+        results = api_client.get_job_results(job_id)
         
-        if dry_run:
-            st.success("Dry run completed successfully!")
-        else:
-            st.success(f"Retraining started! Job ID: {result.get('retrain_job_id')}")
-        
+        if results:
+            # Create tabs for different views
+            tab1, tab2, tab3, tab4, tab5 = st.tabs([
+                "📃 Document", "📝 Extracted Text", "📊 Tables", 
+                "📋 Form Fields", "📥 Downloads"
+            ])
+            
+            # Document view tab
+            with tab1:
+                st.subheader("Document Overview")
+                
+                # Document metadata
+                if "metadata" in results:
+                    metadata = results["metadata"]
+                    
+                    # Display key metadata
+                    cols = st.columns(3)
+                    with cols[0]:
+                        st.metric("Document Type", metadata.get("document_type", "Unknown"))
+                    with cols[1]:
+                        st.metric("Pages", metadata.get("page_count", "N/A"))
+                    with cols[2]:
+                        confidence = metadata.get("confidence", 0) * 100
+                        st.metric("Confidence", f"{confidence:.1f}%")
+                    
+                    # Format creation date if available
+                    if "creation_date" in metadata:
+                        st.write(f"**Created:** {metadata['creation_date']}")
+                    
+                    # Document summary if available
+                    if "summary" in results:
+                        st.markdown("### Summary")
+                        st.info(results["summary"])
+                
+                # Display original document if available
+                if "pages" in results:
+                    for i, page in enumerate(results["pages"]):
+                        if "image" in page:
+                            try:
+                                # Convert image data if needed
+                                image_data = page["image"]
+                                if isinstance(image_data, str):
+                                    # Try to decode base64
+                                    try:
+                                        image_data = base64.b64decode(image_data)
+                                    except:
+                                        pass
+                                
+                                # Display the image with regions
+                                visualize_document_image(
+                                    image_data, 
+                                    regions=page.get("regions", []),
+                                    page_number=i+1
+                                )
+                            except Exception as e:
+                                st.error(f"Error displaying page {i+1}: {str(e)}")
+            
+            # Text extraction tab
+            with tab2:
+                st.subheader("Extracted Text")
+                
+                # Text extraction settings
+                show_confidence = st.checkbox("Highlight low confidence text", value=True)
+                confidence_filter = st.slider("Minimum confidence", 0.0, 1.0, 0.5) if show_confidence else 0.0
+                
+                # Display text by page
+                if "pages" in results:
+                    for i, page in enumerate(results["pages"]):
+                        with st.expander(f"Page {i+1}", expanded=i==0):
+                            # If page has pre-formatted text
+                            if "text" in page:
+                                st.markdown("### Full Text")
+                                st.text(page["text"])
+                            
+                            # If page has text regions
+                            if "regions" in page:
+                                st.markdown("### Text by Region")
+                                visualize_text_regions(
+                                    page["regions"], 
+                                    highlight_confidence=show_confidence,
+                                    confidence_threshold=confidence_filter
+                                )
+            
+            # Tables tab
+            with tab3:
+                st.subheader("Detected Tables")
+                
+                # Extract all tables from all pages
+                all_tables = []
+                if "pages" in results:
+                    for i, page in enumerate(results["pages"]):
+                        if "tables" in page:
+                            for table in page["tables"]:
+                                table["page_number"] = i+1
+                                all_tables.append(table)
+                
+                if all_tables:
+                    visualize_table_regions(all_tables)
+                else:
+                    st.info("No tables detected in document")
+            
+            # Form fields tab
+            with tab4:
+                st.subheader("Form Fields")
+                
+                # Extract all form fields from all pages
+                all_form_fields = []
+                if "pages" in results:
+                    for i, page in enumerate(results["pages"]):
+                        if "form_fields" in page:
+                            for field in page["form_fields"]:
+                                field["page_number"] = i+1
+                                all_form_fields.append(field)
+                
+                if all_form_fields:
+                    create_form_field_visualization(all_form_fields)
+                else:
+                    st.info("No form fields detected in document")
+            
+            # Downloads tab
+            with tab5:
+                st.subheader("Download Results")
+                
+                col1, col2 = st.columns(2)
+                
+                with col1:
+                    st.markdown("#### Document with OCR")
+                    ocr_pdf_url = api_client.get_download_url(job_id, "pdf_ocr")
+                    st.markdown(f'''
+                    <a href="{ocr_pdf_url}" target="_blank">
+                        <button style="background-color:#4CAF50;color:white;padding:10px 24px;border:none;border-radius:4px;cursor:pointer;">
+                            Download OCR PDF
+                        </button>
+                    </a>
+                    ''', unsafe_allow_html=True)
+                
+                with col2:
+                    st.markdown("#### Original Document")
+                    original_url = api_client.get_download_url(job_id, "original")
+                    st.markdown(f'''
+                    <a href="{original_url}" target="_blank">
+                        <button style="background-color:#2196F3;color:white;padding:10px 24px;border:none;border-radius:4px;cursor:pointer;">
+                            Download Original
+                        </button>
+                    </a>
+                    ''', unsafe_allow_html=True)
+                
+                st.markdown("### Extracted Data")
+                
+                col1, col2, col3 = st.columns(3)
+                
+                with col1:
+                    json_url = api_client.get_download_url(job_id, "json")
+                    st.markdown(f'''
+                    <a href="{json_url}" target="_blank">
+                        <button style="background-color:#ff9800;color:white;padding:10px 24px;border:none;border-radius:4px;cursor:pointer;">
+                            Download JSON
+                        </button>
+                    </a>
+                    ''', unsafe_allow_html=True)
+                
+                with col2:
+                    csv_url = api_client.get_download_url(job_id, "csv")
+                    st.markdown(f'''
+                    <a href="{csv_url}" target="_blank">
+                        <button style="background-color:#9c27b0;color:white;padding:10px 24px;border:none;border-radius:4px;cursor:pointer;">
+                            Download CSV
+                        </button>
+                    </a>
+                    ''', unsafe_allow_html=True)
+                
+                with col3:
+                    excel_url = api_client.get_download_url(job_id, "excel")
+                    st.markdown(f'''
+                    <a href="{excel_url}" target="_blank">
+                        <button style="background-color:#607d8b;color:white;padding:10px 24px;border:none;border-radius:4px;cursor:pointer;">
+                            Download Excel
+                        </button>
+                    </a>
+                    ''', unsafe_allow_html=True)
+    
     except Exception as e:
-        st.error(f"Retraining failed: {str(e)}")
+        st.error(f"Error loading job results: {str(e)}")
 
+# If no file is uploaded and no job is selected, show dashboard
+if not uploaded_file and not st.session_state.current_job_id:
+    st.markdown("## 📊 Dashboard")
+    
+    # Display analytics dashboard
+    create_analytics_dashboard(st.session_state.analytics)
+    
+    # Display welcome message for new users
+    if st.session_state.analytics['processed_docs'] == 0:
+        st.info("""
+        ### Welcome to CurioScan OCR!
+        
+        Get started by uploading a document using the sidebar on the left.
+        
+        **Supported formats:**
+        - PDF documents (native and scanned)
+        - Images (JPG, PNG, TIFF)
+        - Office documents (DOCX, XLSX)
+        - Plain text files
+        
+        The system will extract text, detect tables and form fields, and provide downloadable results in various formats.
+        """)
 
+# Footer
+st.markdown("---")
+st.markdown("&copy; 2025 CurioScan OCR - Production Version 2.0.0")
+
+# Add JavaScript for job list item clicking
+st.markdown("""
+<script>
+function handleJobClick(jobId) {
+    // Use Streamlit's component communication mechanism
+    window.parent.postMessage({
+        type: "streamlit:setComponentValue",
+        value: jobId,
+        dataType: "string"
+    }, "*");
+}
+</script>
+""", unsafe_allow_html=True)
+
+# Main function for running the app
 if __name__ == "__main__":
-    main()
+    # This block executes when the script is run directly
+    try:
+        logging.info("Starting CurioScan OCR Streamlit Demo")
+        # The app is already running via Streamlit's execution model
+    except Exception as e:
+        logging.error(f"Error starting application: {str(e)}")

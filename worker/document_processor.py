@@ -1,504 +1,410 @@
-"""
-Document processor for CurioScan workers.
-
-Handles the complete document processing pipeline.
-"""
-
 import os
-import logging
-import json
-import uuid
-from typing import Dict, Any, List, Optional, Tuple
-from pathlib import Path
 import time
+import uuid
+from typing import Dict, Any, Optional, List, Union
+import traceback
+import logging
+from pathlib import Path
 
-import cv2
-import numpy as np
-from PIL import Image
-import pdfplumber
-import pdf2image
-from docx import Document as DocxDocument
+from .types import Document, ProcessingResult
+from .pipeline.pipeline_builder import PipelineBuilder
+from .utils.logging import get_logger, log_execution_time, log_context
+from .model_manager import ModelManager
+from .storage_manager import StorageManager
 
-from worker.model_manager import ModelManager
-from worker.storage_manager import StorageManager
-
-logger = logging.getLogger(__name__)
-
+logger = get_logger(__name__)
 
 class DocumentProcessor:
-    """Handles document processing pipeline."""
+    """
+    Main document processing pipeline that implements the full OCR workflow.
     
-    def __init__(self, model_manager: ModelManager, storage_manager: StorageManager, 
-                 confidence_threshold: float = 0.8):
-        self.model_manager = model_manager
-        self.storage_manager = storage_manager
-        self.confidence_threshold = confidence_threshold
+    The pipeline consists of these stages:
+    1. Preprocessing (document-type specific preparation)
+    2. Image enhancement (deskewing, contrast improvement)
+    3. Renderer classification (determine document type for specialized handling)
+    4. Layout analysis (segment document into regions)
+    5. OCR (extract text from regions)
+    6. Table detection and reconstruction
+    7. Text processing and normalization
+    8. Quality analysis
+    9. Post-processing and metadata extraction
+    10. Result packaging with provenance and export
     
-    def classify_document(self, input_path: str) -> Dict[str, Any]:
-        """
-        Classify document render type.
+    Provides robust error handling, telemetry, and progress tracking.
+    """
+    def __init__(
+        self,
+        document: Optional[Document] = None,
+        file_data: Optional[bytes] = None,
+        job_id: Optional[str] = None,
+        model_manager: Optional[ModelManager] = None,
+        storage_manager: Optional[StorageManager] = None,
+        config: Optional[Dict[str, Any]] = None
+    ):
+        self.document = document
+        self.file_data = file_data
+        self.job_id = job_id or str(uuid.uuid4())
+        self.model_manager = model_manager or ModelManager()
+        self.storage_manager = storage_manager or StorageManager()
+        self.config = config or {}
         
-        Returns classification result with render type and confidence.
+        # Load pipeline configuration
+        pipeline_config = self.config.get("pipeline", {})
+        pipeline_config_path = pipeline_config.get("config_path")
+        self.pipeline_name = pipeline_config.get("name", "default")
+        
+        # Initialize pipeline builder and build processor pipeline
+        self.pipeline_builder = PipelineBuilder(pipeline_config_path)
+        self.processors = []
+        
+        # Performance metrics
+        self.metrics: Dict[str, Any] = {
+            "processing_start": time.time(),
+            "stages": {},
+            "token_count": 0,
+            "region_count": 0,
+            "table_count": 0,
+            "page_count": 0,
+            "confidence_avg": 0.0,
+        }
+        self.progress = 0.0
+        
+        # Configurable settings with defaults
+        self.confidence_threshold = self.config.get("confidence_threshold", 0.8)
+        self.webhook_enabled = self.config.get("webhook_enabled", True)
+        self.pii_redaction = self.config.get("pii_redaction", False)
+        
+    @log_execution_time
+    def process(self) -> ProcessingResult:
+        """
+        Process the document through the entire OCR pipeline.
+        
+        Returns:
+            ProcessingResult object containing extracted data and metadata
         """
         try:
-            logger.info(f"Classifying document: {input_path}")
-            
-            # Download file from storage
-            file_content = self.storage_manager.download_file(input_path)
-            
-            # Extract metadata
-            metadata = self._extract_metadata(file_content, input_path)
-            
-            # Convert to image for classification
-            image = self._convert_to_image(file_content, input_path)
-            
-            # Classify using model
-            classification = self.model_manager.classify_document(image, metadata)
-            
-            logger.info(f"Document classified as: {classification['render_type']} "
-                       f"(confidence: {classification['confidence']:.3f})")
-            
-            return classification
-            
-        except Exception as e:
-            logger.error(f"Document classification failed: {str(e)}")
-            raise
-    
-    def preprocess_document(self, input_path: str, classification_result: Dict[str, Any]) -> Dict[str, Any]:
-        """
-        Preprocess document based on classification.
-        
-        Returns preprocessed data ready for OCR.
-        """
-        try:
-            logger.info(f"Preprocessing document: {input_path}")
-            
-            render_type = classification_result["render_type"]
-            
-            # Download file
-            file_content = self.storage_manager.download_file(input_path)
-            
-            # Convert to images
-            images = self._convert_to_images(file_content, input_path, render_type)
-            
-            # Preprocess each image
-            preprocessed_images = []
-            for i, image in enumerate(images):
-                preprocessed_image = self._preprocess_image(image, render_type)
-                preprocessed_images.append({
-                    "page": i + 1,
-                    "image": preprocessed_image,
-                    "original_size": image.size
-                })
-            
-            logger.info(f"Preprocessed {len(preprocessed_images)} pages")
-            
-            return {
-                "pages": preprocessed_images,
-                "render_type": render_type,
-                "total_pages": len(preprocessed_images)
-            }
-            
-        except Exception as e:
-            logger.error(f"Document preprocessing failed: {str(e)}")
-            raise
-    
-    def extract_text(self, preprocessed_data: Dict[str, Any], 
-                    classification_result: Dict[str, Any]) -> Dict[str, Any]:
-        """
-        Extract text from preprocessed document.
-        
-        Returns OCR results with tokens and confidence scores.
-        """
-        try:
-            logger.info("Extracting text from document")
-            
-            render_type = classification_result["render_type"]
-            pages = preprocessed_data["pages"]
-            
-            all_results = []
-            
-            for page_data in pages:
-                page_num = page_data["page"]
-                image = page_data["image"]
-                
-                logger.info(f"Processing page {page_num}")
-                
-                # Extract text using appropriate method
-                if render_type == "digital_pdf":
-                    # Try native text extraction first
-                    page_result = self._extract_native_text(page_num)
-                    if not page_result or len(page_result.get("tokens", [])) == 0:
-                        # Fallback to OCR
-                        page_result = self.model_manager.extract_text_ocr(image, render_type)
-                else:
-                    # Use OCR for scanned/image documents
-                    page_result = self.model_manager.extract_text_ocr(image, render_type)
-                
-                page_result["page"] = page_num
-                all_results.append(page_result)
-            
-            logger.info(f"Text extraction completed for {len(all_results)} pages")
-            
-            return {
-                "pages": all_results,
-                "total_tokens": sum(len(page.get("tokens", [])) for page in all_results),
-                "render_type": render_type
-            }
-            
-        except Exception as e:
-            logger.error(f"Text extraction failed: {str(e)}")
-            raise
-    
-    def detect_tables(self, preprocessed_data: Dict[str, Any], 
-                     ocr_results: Dict[str, Any]) -> Dict[str, Any]:
-        """
-        Detect and extract tables from document.
-        
-        Returns table detection and extraction results.
-        """
-        try:
-            logger.info("Detecting tables in document")
-            
-            pages = preprocessed_data["pages"]
-            ocr_pages = ocr_results["pages"]
-            
-            all_table_results = []
-            
-            for page_data, ocr_page in zip(pages, ocr_pages):
-                page_num = page_data["page"]
-                image = page_data["image"]
-                tokens = ocr_page.get("tokens", [])
-                
-                logger.info(f"Detecting tables on page {page_num}")
-                
-                # Detect tables using model
-                table_detection = self.model_manager.detect_tables(image)
-                
-                # Extract table content
-                table_extractions = []
-                for table in table_detection.get("tables", []):
-                    table_content = self._extract_table_content(table, tokens, image)
-                    table_extractions.append(table_content)
-                
-                all_table_results.append({
-                    "page": page_num,
-                    "tables": table_extractions,
-                    "detection_method": table_detection.get("method", "unknown")
-                })
-            
-            logger.info(f"Table detection completed for {len(all_table_results)} pages")
-            
-            return {
-                "pages": all_table_results,
-                "total_tables": sum(len(page.get("tables", [])) for page in all_table_results)
-            }
-            
-        except Exception as e:
-            logger.error(f"Table detection failed: {str(e)}")
-            raise
-    
-    def postprocess_results(self, ocr_results: Dict[str, Any], table_results: Dict[str, Any],
-                           classification_result: Dict[str, Any]) -> Dict[str, Any]:
-        """
-        Postprocess and normalize extraction results.
-        
-        Returns final structured results in the required schema.
-        """
-        try:
-            logger.info("Postprocessing extraction results")
-            
-            render_type = classification_result["render_type"]
-            
-            # Combine OCR and table results
-            final_rows = []
-            row_counter = 0
-            
-            # Process each page
-            for page_idx, (ocr_page, table_page) in enumerate(zip(
-                ocr_results["pages"], table_results["pages"]
-            )):
-                page_num = page_idx + 1
-                
-                # Add table rows first (higher priority)
-                for table_idx, table in enumerate(table_page.get("tables", [])):
-                    for row_idx, row in enumerate(table.get("rows", [])):
-                        row_id = f"table_{page_num}_{table_idx}_{row_idx}"
-                        region_id = f"table_{table_idx}"
-                        
-                        # Calculate confidence and review flag
-                        avg_confidence = np.mean([cell.get("confidence", 0.0) 
-                                                for cell in row.get("cells", [])])
-                        needs_review = avg_confidence < self.confidence_threshold
-                        
-                        final_row = {
-                            "row_id": row_id,
-                            "page": page_num,
-                            "region_id": region_id,
-                            "bbox": row.get("bbox", [0, 0, 0, 0]),
-                            "columns": row.get("data", {}),
-                            "provenance": {
-                                "file": "input_file",  # TODO: Get actual filename
-                                "page": page_num,
-                                "bbox": row.get("bbox", [0, 0, 0, 0]),
-                                "token_ids": row.get("token_ids", []),
-                                "confidence": avg_confidence
-                            },
-                            "needs_review": needs_review
-                        }
-                        
-                        final_rows.append(final_row)
-                        row_counter += 1
-                
-                # Add non-table text regions
-                text_regions = self._extract_text_regions(
-                    ocr_page.get("tokens", []), 
-                    table_page.get("tables", [])
+            # Build processing pipeline if not already built
+            if not self.processors:
+                self.processors = self.pipeline_builder.build_pipeline(self.pipeline_name)
+                processor_names = [p[0] for p in self.processors]
+                logger.info(
+                    f"Built processing pipeline with {len(self.processors)} processors: {', '.join(processor_names)}",
+                    extra={"job_id": self.job_id, "pipeline": self.pipeline_name}
                 )
+            
+            # Initialize progress tracking
+            total_processors = len(self.processors)
+            progress_increment = 100.0 / total_processors if total_processors > 0 else 100.0
+            
+            # Process document through each processor in pipeline
+            for idx, (processor_name, processor) in enumerate(self.processors):
+                stage_name = processor_name.split('.')[-1]
+                self._start_stage(stage_name)
                 
-                for region_idx, region in enumerate(text_regions):
-                    row_id = f"text_{page_num}_{region_idx}"
-                    region_id = f"text_{region_idx}"
-                    
-                    # Calculate confidence
-                    avg_confidence = np.mean([token.get("confidence", 0.0) 
-                                            for token in region.get("tokens", [])])
-                    needs_review = avg_confidence < self.confidence_threshold
-                    
-                    final_row = {
-                        "row_id": row_id,
-                        "page": page_num,
-                        "region_id": region_id,
-                        "bbox": region.get("bbox", [0, 0, 0, 0]),
-                        "columns": {"text": region.get("text", "")},
-                        "provenance": {
-                            "file": "input_file",  # TODO: Get actual filename
-                            "page": page_num,
-                            "bbox": region.get("bbox", [0, 0, 0, 0]),
-                            "token_ids": [token.get("token_id", 0) 
-                                        for token in region.get("tokens", [])],
-                            "confidence": avg_confidence
-                        },
-                        "needs_review": needs_review
-                    }
-                    
-                    final_rows.append(final_row)
-                    row_counter += 1
+                # Process the document
+                with log_context(f"{stage_name} processing", logger=logger):
+                    try:
+                        self.document = processor.process(self.document)
+                        
+                        # Save intermediate result if configured
+                        if self.config.get("save_intermediates", False):
+                            self._save_intermediate(stage_name, idx)
+                            
+                    except Exception as e:
+                        logger.error(
+                            f"Error in {stage_name} processor: {str(e)}",
+                            extra={
+                                "job_id": self.job_id,
+                                "processor": processor_name,
+                                "traceback": traceback.format_exc()
+                            }
+                        )
+                        if not self.config.get("continue_on_error", False):
+                            raise
+                
+                # Update progress
+                self.progress = (idx + 1) * progress_increment
+                self._complete_stage(stage_name, progress=self.progress)
+                
+                # Update metrics
+                self._update_metrics()
             
-            # Calculate overall confidence
-            if final_rows:
-                overall_confidence = np.mean([
-                    row["provenance"]["confidence"] for row in final_rows
-                ])
-            else:
-                overall_confidence = 0.0
+            # Package results
+            self._start_stage("packaging")
+            result = self._package_results()
+            self._complete_stage("packaging", progress=100)
             
-            logger.info(f"Postprocessing completed: {len(final_rows)} rows extracted")
+            # Log completion metrics
+            self.metrics["processing_end"] = time.time()
+            self.metrics["processing_duration"] = (
+                self.metrics["processing_end"] - self.metrics["processing_start"]
+            )
             
-            return {
-                "rows": final_rows,
-                "metadata": {
-                    "render_type": render_type,
-                    "total_pages": len(ocr_results["pages"]),
-                    "total_tokens": ocr_results.get("total_tokens", 0),
-                    "total_tables": table_results.get("total_tables", 0),
-                    "confidence_threshold": self.confidence_threshold
-                },
-                "confidence_score": overall_confidence,
-                "render_type": render_type
+            logger.info(
+                f"Processing completed for job {self.job_id}",
+                extra={
+                    "job_id": self.job_id,
+                    "duration": self.metrics["processing_duration"],
+                    "page_count": self.metrics["page_count"],
+                    "token_count": self.metrics["token_count"],
+                    "confidence_avg": self.metrics["confidence_avg"]
+                }
+            )
+            
+            return result
+            
+        except Exception as e:
+            logger.error(
+                f"Processing failed for job {self.job_id}: {str(e)}",
+                extra={
+                    "job_id": self.job_id,
+                    "error": str(e),
+                    "traceback": traceback.format_exc()
+                }
+            )
+            # Re-raise with detailed error
+            raise DocumentProcessingError(
+                f"Failed to process document: {str(e)}",
+                job_id=self.job_id,
+                stage=self.metrics.get("current_stage", "unknown"),
+                details=str(e)
+            )
+    
+    def _update_metrics(self):
+        """Update document processing metrics"""
+        if not self.document:
+            return
+            
+        # Update page count
+        self.metrics["page_count"] = len(self.document.pages)
+        
+        # Update token count and confidence
+        token_count = 0
+        confidence_sum = 0.0
+        region_count = 0
+        table_count = 0
+        
+        for page in self.document.pages:
+            # Count tokens and get confidence from regions
+            for region in page.regions:
+                region_count += 1
+                token_count += len(region.tokens)
+                confidence_sum += sum(token.confidence for token in region.tokens) if region.tokens else 0
+            
+            # Count tables
+            table_count += len(page.tables)
+            
+            # Count tokens in tables
+            for table in page.tables:
+                for row in table.cells:
+                    for cell in row:
+                        if cell:
+                            token_count += len(cell.tokens)
+                            confidence_sum += sum(token.confidence for token in cell.tokens) if cell.tokens else 0
+        
+        # Update metrics
+        self.metrics["token_count"] = token_count
+        self.metrics["region_count"] = region_count
+        self.metrics["table_count"] = table_count
+        self.metrics["confidence_avg"] = (
+            confidence_sum / token_count if token_count > 0 else 0.0
+        )
+    
+    def _save_intermediate(self, stage_name: str, idx: int):
+        """Save intermediate processing result"""
+        if not self.document:
+            return
+            
+        try:
+            # Create intermediate filename
+            timestamp = time.strftime("%Y%m%d-%H%M%S")
+            filename = f"{self.job_id}_{idx:02d}_{stage_name}_{timestamp}.json"
+            intermediates_path = self.config.get("intermediates_path", "intermediates")
+            os.makedirs(intermediates_path, exist_ok=True)
+            filepath = os.path.join(intermediates_path, filename)
+            
+            # Save document as JSON
+            self.storage_manager.save_document_json(self.document, filepath)
+            
+            logger.debug(
+                f"Saved intermediate result after {stage_name}",
+                extra={
+                    "job_id": self.job_id,
+                    "stage": stage_name,
+                    "filepath": filepath
+                }
+            )
+        except Exception as e:
+            logger.warning(
+                f"Failed to save intermediate result: {str(e)}",
+                extra={
+                    "job_id": self.job_id,
+                    "stage": stage_name
+                }
+            )
+    
+    def _start_stage(self, stage_name: str):
+        """Mark the start of a processing stage"""
+        self.metrics["current_stage"] = stage_name
+        self.metrics["stages"][stage_name] = {
+            "start": time.time()
+        }
+        logger.info(
+            f"Starting {stage_name} stage for job {self.job_id}",
+            extra={
+                "job_id": self.job_id,
+                "stage": stage_name
             }
-            
-        except Exception as e:
-            logger.error(f"Postprocessing failed: {str(e)}")
-            raise
+        )
     
-    def store_results(self, job_id: str, results: Dict[str, Any]) -> str:
-        """
-        Store processing results.
+    def _complete_stage(self, stage_name: str, progress: float = None):
+        """Mark completion of a processing stage"""
+        if stage_name in self.metrics["stages"]:
+            self.metrics["stages"][stage_name]["end"] = time.time()
+            self.metrics["stages"][stage_name]["duration"] = (
+                self.metrics["stages"][stage_name]["end"] - 
+                self.metrics["stages"][stage_name]["start"]
+            )
         
-        Returns the output path where results are stored.
-        """
-        try:
-            logger.info(f"Storing results for job {job_id}")
+        if progress is not None:
+            self.progress = progress
             
-            # Convert results to JSON
-            results_json = json.dumps(results, indent=2, default=str)
-            
-            # Store in storage backend
-            output_path = f"output/{job_id}/results.json"
-            self.storage_manager.upload_file(results_json.encode(), output_path)
-            
-            logger.info(f"Results stored at: {output_path}")
-            
-            return output_path
-            
-        except Exception as e:
-            logger.error(f"Failed to store results: {str(e)}")
-            raise
+        logger.info(
+            f"Completed {stage_name} stage for job {self.job_id}",
+            extra={
+                "job_id": self.job_id,
+                "stage": stage_name,
+                "duration": self.metrics["stages"].get(stage_name, {}).get("duration"),
+                "progress": self.progress
+            }
+        )
     
-    # Helper methods
-    
-    def _extract_metadata(self, file_content: bytes, file_path: str) -> Dict[str, Any]:
-        """Extract metadata from file."""
-        metadata = {
-            "file_size": len(file_content),
-            "mime_type": self._detect_mime_type(file_content, file_path),
-            "has_embedded_text": False,
-            "page_count": 1
-        }
+    def _package_results(self) -> ProcessingResult:
+        """Package processing results with full provenance"""
+        rows = []
         
-        # Try to extract more metadata based on file type
-        try:
-            if metadata["mime_type"] == "application/pdf":
-                # Use pdfplumber to extract PDF metadata
-                import io
-                with pdfplumber.open(io.BytesIO(file_content)) as pdf:
-                    metadata["page_count"] = len(pdf.pages)
-                    # Check for embedded text
-                    for page in pdf.pages[:3]:  # Check first 3 pages
-                        if page.extract_text().strip():
-                            metadata["has_embedded_text"] = True
-                            break
-        except Exception as e:
-            logger.warning(f"Failed to extract detailed metadata: {str(e)}")
-        
-        return metadata
-    
-    def _detect_mime_type(self, file_content: bytes, file_path: str) -> str:
-        """Detect MIME type from file content and extension."""
-        import mimetypes
-        
-        # Try to detect from extension first
-        mime_type, _ = mimetypes.guess_type(file_path)
-        
-        if mime_type:
-            return mime_type
-        
-        # Fallback to magic bytes
-        if file_content.startswith(b'%PDF'):
-            return "application/pdf"
-        elif file_content.startswith(b'\xff\xd8\xff'):
-            return "image/jpeg"
-        elif file_content.startswith(b'\x89PNG'):
-            return "image/png"
-        elif file_content.startswith(b'PK'):
-            return "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-        else:
-            return "application/octet-stream"
-    
-    def _convert_to_image(self, file_content: bytes, file_path: str) -> Image.Image:
-        """Convert file to single image for classification."""
-        images = self._convert_to_images(file_content, file_path)
-        return images[0] if images else Image.new('RGB', (100, 100), 'white')
-    
-    def _convert_to_images(self, file_content: bytes, file_path: str, 
-                          render_type: str = None) -> List[Image.Image]:
-        """Convert file to list of images."""
-        import io
-        
-        mime_type = self._detect_mime_type(file_content, file_path)
-        
-        try:
-            if mime_type == "application/pdf":
-                # Convert PDF to images
-                images = pdf2image.convert_from_bytes(file_content, dpi=300)
-                return images
-            
-            elif mime_type.startswith("image/"):
-                # Load image directly
-                image = Image.open(io.BytesIO(file_content))
-                return [image.convert('RGB')]
-            
-            elif "word" in mime_type:
-                # For DOCX, we'd need to convert to PDF first or extract images
-                # For now, create a placeholder
-                return [Image.new('RGB', (800, 1000), 'white')]
-            
-            else:
-                # Unknown format, create placeholder
-                return [Image.new('RGB', (800, 1000), 'white')]
+        # Generate rows from document data with full provenance
+        for page_idx, page in enumerate(self.document.pages):
+            # Handle text regions
+            for region in page.regions:
+                row = {
+                    "row_id": f"r_{uuid.uuid4().hex[:8]}",
+                    "page": page_idx,
+                    "region_id": region.id,
+                    "bbox": region.bbox.dict(),
+                    "text": region.text,
+                    "type": region.type,
+                    "columns": {"text": region.text},
+                    "provenance": {
+                        "file": self.document.metadata.get("filename", ""),
+                        "page": page_idx,
+                        "bbox": region.bbox.dict(),
+                        "token_ids": [t.id for t in region.tokens],
+                        "confidence": region.confidence
+                    },
+                    "needs_review": region.confidence < self.confidence_threshold,
+                    "attributes": region.attributes
+                }
+                rows.append(row)
                 
-        except Exception as e:
-            logger.error(f"Failed to convert file to images: {str(e)}")
-            return [Image.new('RGB', (800, 1000), 'white')]
-    
-    def _preprocess_image(self, image: Image.Image, render_type: str) -> Image.Image:
-        """Preprocess image based on render type."""
-        try:
-            # Convert to numpy array
-            img_array = np.array(image)
-            
-            if render_type in ["scanned_image", "photograph"]:
-                # Apply preprocessing for scanned/photographed documents
-                img_array = self._deskew_image(img_array)
-                img_array = self._denoise_image(img_array)
-                img_array = self._enhance_contrast(img_array)
-            
-            # Convert back to PIL Image
-            return Image.fromarray(img_array)
-            
-        except Exception as e:
-            logger.warning(f"Image preprocessing failed: {str(e)}")
-            return image
-    
-    def _deskew_image(self, img_array: np.ndarray) -> np.ndarray:
-        """Deskew image to correct rotation."""
-        # Simple deskewing implementation
-        # In production, you'd use more sophisticated methods
-        return img_array
-    
-    def _denoise_image(self, img_array: np.ndarray) -> np.ndarray:
-        """Remove noise from image."""
-        if len(img_array.shape) == 3:
-            gray = cv2.cvtColor(img_array, cv2.COLOR_RGB2GRAY)
-        else:
-            gray = img_array
+            # Handle tables with special column structure
+            for table in page.tables:
+                for row_idx, row_data in enumerate(table.cells):
+                    # Convert row to standard output format
+                    column_values = {}
+                    token_ids = []
+                    min_confidence = 1.0
+                    
+                    # Extract column values and track provenance
+                    for col_idx, cell in enumerate(row_data):
+                        if cell:
+                            column_name = f"col_{col_idx}" if not hasattr(table, 'columns') or not table.columns or col_idx >= len(table.columns) else table.columns[col_idx]
+                            column_values[column_name] = cell.text
+                            token_ids.extend([t.id for t in cell.tokens])
+                            cell_confidence = sum(t.confidence for t in cell.tokens) / len(cell.tokens) if cell.tokens else 0
+                            min_confidence = min(min_confidence, cell_confidence)
+                    
+                    table_row = {
+                        "row_id": f"t{table.id}_r{row_idx}",
+                        "page": page_idx,
+                        "region_id": table.id,
+                        "bbox": table.bbox.dict(),
+                        "type": "table_row",
+                        "columns": column_values,
+                        "provenance": {
+                            "file": self.document.metadata.get("filename", ""),
+                            "page": page_idx,
+                            "bbox": table.bbox.dict(),
+                            "token_ids": token_ids,
+                            "confidence": min_confidence,
+                            "table_id": table.id
+                        },
+                        "needs_review": min_confidence < self.confidence_threshold,
+                        "attributes": table.attributes
+                    }
+                    rows.append(table_row)
         
-        # Apply median filter to remove noise
-        denoised = cv2.medianBlur(gray, 3)
-        
-        # Convert back to RGB if needed
-        if len(img_array.shape) == 3:
-            return cv2.cvtColor(denoised, cv2.COLOR_GRAY2RGB)
-        else:
-            return denoised
-    
-    def _enhance_contrast(self, img_array: np.ndarray) -> np.ndarray:
-        """Enhance image contrast."""
-        if len(img_array.shape) == 3:
-            # Convert to LAB color space for better contrast enhancement
-            lab = cv2.cvtColor(img_array, cv2.COLOR_RGB2LAB)
-            l, a, b = cv2.split(lab)
-            
-            # Apply CLAHE to L channel
-            clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
-            l = clahe.apply(l)
-            
-            # Merge channels and convert back
-            enhanced = cv2.merge([l, a, b])
-            return cv2.cvtColor(enhanced, cv2.COLOR_LAB2RGB)
-        else:
-            # Grayscale image
-            clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
-            return clahe.apply(img_array)
-    
-    def _extract_native_text(self, page_num: int) -> Optional[Dict[str, Any]]:
-        """Extract native text from PDF (placeholder)."""
-        # TODO: Implement native PDF text extraction
-        return None
-    
-    def _extract_table_content(self, table: Dict[str, Any], tokens: List[Dict[str, Any]], 
-                              image: Image.Image) -> Dict[str, Any]:
-        """Extract content from detected table."""
-        # TODO: Implement table content extraction
-        return {
-            "bbox": table.get("bbox", [0, 0, 0, 0]),
-            "rows": [],
-            "confidence": table.get("confidence", 0.0)
+        # Create the final result structure with improved metadata
+        metadata = {
+            **self.document.metadata,
+            "processing": {
+                "job_id": self.job_id,
+                "pipeline": self.pipeline_name,
+                "processors": [p[0] for p in self.processors],
+                "duration": self.metrics["processing_duration"] if "processing_duration" in self.metrics else None,
+                "confidence": self.metrics["confidence_avg"],
+                "page_count": self.metrics["page_count"],
+                "token_count": self.metrics["token_count"],
+                "region_count": self.metrics["region_count"],
+                "table_count": self.metrics["table_count"]
+            }
         }
+        
+        result = ProcessingResult(
+            job_id=self.job_id,
+            document_id=self.document.id,
+            filename=self.document.metadata.get("filename", "unknown"),
+            rows=rows,
+            metrics=self.metrics,
+            metadata=metadata
+        )
+        
+        return result
+
+    def get_available_processors(self) -> Dict[str, str]:
+        """
+        Get list of available processors
+        
+        Returns:
+            Dictionary of processor_id -> description
+        """
+        return self.pipeline_builder.list_available_processors()
     
-    def _extract_text_regions(self, tokens: List[Dict[str, Any]], 
-                             tables: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-        """Extract text regions that are not part of tables."""
-        # TODO: Implement text region extraction
-        return []
+    def get_processor_details(self, processor_id: str) -> Dict[str, Any]:
+        """
+        Get detailed information about a processor
+        
+        Args:
+            processor_id: ID of the processor
+            
+        Returns:
+            Dictionary with processor details
+        """
+        return self.pipeline_builder.get_processor_details(processor_id)
+
+
+class DocumentProcessingError(Exception):
+    """Exception raised for document processing errors with context"""
+    
+    def __init__(
+        self, 
+        message: str, 
+        job_id: str = None, 
+        stage: str = None,
+        details: str = None
+    ):
+        self.message = message
+        self.job_id = job_id
+        self.stage = stage
+        self.details = details
+        super().__init__(self.message)

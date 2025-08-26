@@ -8,8 +8,14 @@ import logging
 import os
 from typing import Optional, Dict, Any
 
-import torch
+# torch is optional; lazily imported inside functions to keep API lightweight
 from .config import get_settings
+from common.feature_flags import (
+    LOAD_MODELS_ON_STARTUP,
+    LOAD_EASYOCR,
+    LOAD_TABLE_DETECTOR,
+    LOAD_LAYOUT_ANALYZER,
+)
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
@@ -21,23 +27,32 @@ _models: Dict[str, Any] = {}
 async def init_models():
     """Initialize ML models for the API."""
     try:
+        if not LOAD_MODELS_ON_STARTUP:
+            logger.info("Skipping ML model loading on startup (feature flag)")
+            return
         logger.info("Initializing ML models...")
         
-        # Determine device
+        # Determine device (lazy torch import)
         device = _get_device()
         logger.info(f"Using device: {device}")
         
         # Initialize renderer classifier
         await _init_renderer_classifier(device)
-        
+
         # Initialize OCR models
         await _init_ocr_models(device)
-        
+
         # Initialize table detector
-        await _init_table_detector(device)
-        
+        if LOAD_TABLE_DETECTOR:
+            await _init_table_detector(device)
+        else:
+            logger.info("Skipping table detector per feature flag")
+
         # Initialize layout analyzer
-        await _init_layout_analyzer(device)
+        if LOAD_LAYOUT_ANALYZER:
+            await _init_layout_analyzer(device)
+        else:
+            logger.info("Skipping layout analyzer per feature flag")
         
         logger.info("ML models initialized successfully")
         
@@ -56,9 +71,13 @@ async def _init_renderer_classifier(device: str):
         
         if os.path.exists(model_path):
             model = RendererClassifier()
-            model.load_state_dict(torch.load(model_path, map_location=device))
-            model.to(device)
-            model.eval()
+            try:
+                import torch  # type: ignore
+                model.load_state_dict(torch.load(model_path, map_location=device))
+                model.to(device)
+                model.eval()
+            except Exception as e:
+                logger.warning(f"Torch not available or failed to load weights: {e}; proceeding without weights")
             
             _models["renderer_classifier"] = model
             logger.info("Renderer classifier loaded successfully")
@@ -80,12 +99,15 @@ async def _init_ocr_models(device: str):
         logger.info("Tesseract OCR initialized")
         
         # Initialize EasyOCR if available
-        try:
-            easyocr_model = EasyOCR(["en"], gpu=(device != "cpu"))
-            _models["easyocr"] = easyocr_model
-            logger.info("EasyOCR initialized")
-        except Exception as e:
-            logger.warning(f"Failed to initialize EasyOCR: {str(e)}")
+        if LOAD_EASYOCR:
+            try:
+                easyocr_model = EasyOCR(["en"], gpu=(device != "cpu"))
+                _models["easyocr"] = easyocr_model
+                logger.info("EasyOCR initialized")
+            except Exception as e:
+                logger.warning(f"Failed to initialize EasyOCR: {str(e)}")
+        else:
+            logger.info("Skipping EasyOCR per feature flag")
             
     except Exception as e:
         logger.error(f"Failed to initialize OCR models: {str(e)}")
@@ -131,10 +153,15 @@ async def _init_layout_analyzer(device: str):
 
 def _get_device() -> str:
     """Determine the best device for model inference."""
+    try:
+        import torch  # type: ignore
+    except Exception:
+        return "cpu"
+
     if settings.device == "auto":
-        if torch.cuda.is_available():
+        if hasattr(torch, "cuda") and torch.cuda.is_available():
             return "cuda"
-        elif hasattr(torch.backends, 'mps') and torch.backends.mps.is_available():
+        elif hasattr(torch, "backends") and hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
             return "mps"
         else:
             return "cpu"

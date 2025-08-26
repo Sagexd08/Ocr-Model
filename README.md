@@ -1,209 +1,219 @@
-# CurioScan - Production-Grade OCR System
+# CurioScan
 
-CurioScan is a comprehensive OCR system designed for production use, featuring intelligent document classification, hybrid OCR processing, table extraction, and human-in-the-loop review capabilities.
+CurioScan is a production-grade OCR system for ingesting, understanding, and exporting documents.
 
-## 🚀 Quick Start
+## Features
 
-### Local Development with Docker Compose
+- **Ingestion**: Handles PDFs (digital & scanned), DOCX, TIFF/JPEG/PNG, and photographed pages.
+- **Classification**: Classifies render type (digital_pdf, scanned_image, etc.) for specialized processing.
+- **Export**: Produces 1:1 faithful exports in CSV, XLSX, and JSON with detailed provenance.
+- **Human-in-the-loop**: Surfaces low-confidence items for review and feeds corrections back into the system.
+- **Scalable & Deployable**: Built with Docker, docker-compose, Helm, and Kubernetes for scalability.
+
+## Getting Started
+
+### Prerequisites
+
+- Docker
+- Docker Compose
+
+### Local Demo
+
+1.  **Clone the repository:**
+
+    ```bash
+    git clone https://github.com/your-username/curioscan.git
+    cd curioscan
+    ```
+
+2.  **Run the demo:**
+
+    ```bash
+    docker-compose up
+    ```
+
+    This will start the following services:
+
+    -   `api`: FastAPI backend
+    -   `worker`: Celery worker
+    -   `redis`: Message broker
+    -   `minio`: S3-compatible object storage
+    -   `streamlit`: Streamlit demo UI
+    -   `frontend`: React-based review UI
+
+3.  **Access the demo:**
+
+    -   **Streamlit UI**: http://localhost:8501
+    -   **Review UI**: http://localhost:3000/review/{job_id}
+    -   **API**: http://localhost:8000/docs
+
+## Usage
+
+### Training
+
+To train a model, run the following command:
+
 ```bash
-# Clone and setup
-git clone <repository-url>
-cd OCR(Freelance)
-
-# Start all services (API, Worker, Redis, MinIO, Streamlit)
-docker-compose up
-
-# Access Streamlit demo at http://localhost:8501
-# API documentation at http://localhost:8000/docs
-```
-
-### Manual Setup
-```bash
-# Install dependencies
-pip install -r requirements.txt
-
-# Start Redis and MinIO (or use docker-compose for just these)
-docker-compose up redis minio
-
-# Start API server
-uvicorn api.main:app --host 0.0.0.0 --port 8000
-
-# Start worker
-celery -A worker.celery_app worker --loglevel=info
-
-# Start Streamlit demo
-streamlit run streamlit_demo/app.py
-```
-
-### Sample Processing
-```bash
-# Run end-to-end demo
-./demo_process.sh
-
-# Train model
 python training/train.py --config configs/demo.yaml
+```
 
-# Evaluate model
+### Evaluation
+
+To evaluate a model, run the following command:
+
+```bash
 python evaluation/evaluate.py --dataset demo_holdout
 ```
 
-## 📁 Repository Structure
+### End-to-End Demo
 
-```
-OCR(Freelance)/
-├── training/           # Training scripts and configs
-├── models/            # Model definitions and checkpoints
-├── api/               # FastAPI backend
-├── worker/            # Celery worker pipeline
-├── streamlit_demo/    # Streamlit demo application
-├── deploy/            # Deployment configurations
-├── tests/             # Test suite
-├── evaluation/        # Evaluation scripts
-├── configs/           # Configuration files
-├── data/              # Sample data and datasets
-├── docs/              # Documentation
-├── requirements.txt   # Python dependencies
-├── docker-compose.yml # Local development setup
-├── demo_process.sh    # End-to-end demo script
-└── README.md          # This file
-```
+Run the end-to-end demo script:
 
-## 🎯 Key Features
-
-### Document Processing
-- **Multi-format support**: PDFs (digital + scanned), DOCX, TIFF/JPEG/PNG, photographed pages
-- **Intelligent classification**: Automatic render type detection (digital_pdf, scanned_image, photograph, docx, form, table_heavy, invoice, handwritten)
-- **Hybrid OCR**: Native text extraction for digital PDFs, advanced OCR for scanned content
-- **Table extraction**: Robust table detection and reconstruction with rowspan/colspan handling
-- **Provenance tracking**: Complete lineage from source to output with bounding boxes and confidence scores
-
-### Human-in-the-Loop Review
-- **Confidence-based flagging**: Automatic identification of low-confidence regions
-- **Interactive review UI**: Edit, accept, or reject OCR results
-- **Retraining pipeline**: Feed corrections back into model training
-
-### Production-Ready Architecture
-- **Scalable workers**: Redis + Celery for async processing
-- **API-first design**: RESTful API with webhooks and status tracking
-- **Monitoring**: Prometheus metrics and Grafana dashboards
-- **Deployment**: Docker, Kubernetes Helm charts, auto-scaling
-
-## 📊 Output Schema
-
-All exports follow this exact schema with complete provenance:
-
-```json
-{
-  "rows": [
-    {
-      "row_id": "string",
-      "page": 1,
-      "region_id": "string", 
-      "bbox": [x1, y1, x2, y2],
-      "columns": {"col_name": "value"},
-      "provenance": {
-        "file": "string",
-        "page": 1,
-        "bbox": [x1, y1, x2, y2],
-        "token_ids": [1, 2, 3],
-        "confidence": 0.95
-      },
-      "needs_review": false
-    }
-  ]
-}
-```
-
-## 🔧 API Endpoints
-
-- `POST /upload` → `{ job_id }`
-- `GET /status/{job_id}` → `{ status, progress, preview }`
-- `GET /result/{job_id}` → downloadable CSV/XLSX/JSON + provenance
-- `POST /webhooks/register` → register callback
-- `GET /review/{job_id}` → paginated review payload for UI
-- `POST /retrain-trigger` → trigger retraining with accepted corrections
-
-## 🎨 Streamlit Demo Features
-
-- **Pipeline visualization**: Live status and timing for each processing stage
-- **OCR overlay viewer**: Toggle bounding boxes, tokens, confidence heatmaps
-- **Interactive table editor**: Edit cells, merge/split, add/remove rows
-- **Provenance inspector**: Click any cell to see source location and OCR details
-- **Training dashboard**: Loss curves, F1 scores, evaluation reports
-- **Export options**: CSV, XLSX, JSON, complete provenance ZIP
-
-## 🏋️ Training & Evaluation
-
-### Performance Targets
-- Digital PDF token F1 ≥ 0.99
-- Scanned pages token F1 ≥ 0.98  
-- Table cell reconstruction ≥ 0.95
-- Single-page inference < 2s on GPU
-
-### Training Features
-- **Multi-model support**: LayoutLMv3, TrOCR, DocTR, Tesseract fallback
-- **Advanced techniques**: Ensembling, knowledge distillation, active learning
-- **Robust augmentation**: Perspective warp, blur, artifacts, occlusions
-- **Distributed training**: DDP, AMP, checkpointing, SLURM/K8s job examples
-- **Hyperparameter optimization**: Optuna integration
-- **Model export**: ONNX, TorchScript, quantization examples
-
-## 🔒 Security & Privacy
-
-- **TLS endpoints**: Secure API communication
-- **Encryption**: S3/MinIO storage encryption
-- **On-premise option**: Complete air-gapped deployment
-- **PII detection**: Optional redaction capabilities
-- **Access controls**: Token-based or OAuth integration
-
-## 🚀 Deployment Options
-
-### Local Development
 ```bash
-docker-compose up
+./demo_process.sh
 ```
 
-### Production Kubernetes
+## Project Structure
+
+```
+├── api
+├── worker
+├── models
+├── training
+├── streamlit_demo
+├── frontend
+├── deploy
+├── tests
+├── # CurioScan OCR Processing System
+
+A scalable, production-ready OCR-powered intelligent document processing system capable of parsing raw PDFs, Word documents, scanned images, and multi-page documents with high accuracy.
+
+## Features
+
+- **Multi-Model OCR Processing**: Combines Tesseract, PaddleOCR, and optimized ONNX models for high accuracy
+- **Intelligent Document Classification**: Automatically classifies document types
+- **Form Field Detection**: Extracts structured form data including checkboxes and input fields
+- **Table Detection and Extraction**: Identifies and structures tabular data
+- **Hybrid PDF Processing**: Handles both native (digital) PDF text and scanned PDF pages
+- **Layout Analysis**: Preserves document layout and structure
+- **Multi-Format Export**: Export to JSON, CSV, Excel, and plain text
+- **Asynchronous Processing**: Celery-based distributed task processing
+- **API-First Design**: RESTful API for document uploading and retrieval
+
+## System Architecture
+
+The system consists of the following main components:
+
+- **API Server**: FastAPI-based REST API for document upload and retrieval
+- **Worker**: Celery workers that process documents asynchronously
+- **Storage Manager**: Handles document storage and retrieval
+- **Model Manager**: Manages ML models and their lifecycle
+- **Processing Pipeline**: Configurable pipeline of document processors
+
+### Processing Pipeline
+
+The document processing pipeline consists of these stages:
+
+1. **Document Type Detection**: Determine document type (PDF, image, Word, etc.)
+2. **PDF Processing**: Extract text from PDFs, handle hybrid content
+3. **OCR Processing**: Extract text from images using ONNX-optimized OCR
+4. **Layout Analysis**: Analyze document layout and structure
+5. **Table Detection**: Identify and extract tables
+6. **Form Field Extraction**: Extract form fields and values
+7. **Post-Processing**: Clean and normalize text
+8. **Export**: Package results in requested formats
+
+## Installation
+
+### Prerequisites
+
+- Python 3.8+
+- PostgreSQL
+- Redis
+- Docker (optional)
+
+### Local Setup
+
+1. Clone the repository
+2. Install dependencies:
+
 ```bash
-helm install curioscan deploy/helm/curioscan
+pip install -r requirements.txt
 ```
 
-### Monitoring
-- Prometheus metrics collection
-- Grafana dashboards for performance monitoring
-- Health checks and alerting
+3. Set up the database:
 
-## 🧠 LLM Integration (Optional)
+```bash
+alembic upgrade head
+```
 
-LLMs are used strictly for structural disambiguation and normalization - never to invent missing data:
+4. Start the API server:
 
-**System Prompt**: "You are a strict normalizer. Input: OCR tokens with bbox and confidence. Output: JSON matching the schema. Do not invent missing values. If unsure, set needs_review=true. Output JSON only."
+```bash
+uvicorn api.main:app --reload
+```
 
-## 📈 Evaluation Metrics
+5. Start the Celery worker:
 
-- Token-level precision/recall/F1
-- Region detection mAP (IoU thresholds)
-- Table reconstruction accuracy (cell-level)
-- End-to-end field exact-match accuracy
+```bash
+celery -A worker.celery_app worker --loglevel=info
+```
 
-## 🤝 Contributing
+### Docker Setup
 
-1. Fork the repository
-2. Create a feature branch
-3. Add tests for new functionality
-4. Ensure all tests pass
-5. Submit a pull request
+1. Build and start the containers:
 
-## 📄 License
+```bash
+docker-compose up -d
+```
 
-MIT License - see LICENSE file for details.
+## Usage
 
-## 🆘 Support
+### API Endpoints
 
-- Documentation: `/docs`
-- Issues: GitHub Issues
-- API Reference: `http://localhost:8000/docs` when running
+- `POST /api/upload`: Upload a document for processing
+- `GET /api/status/{job_id}`: Check processing status
+- `GET /api/results/{job_id}`: Get processing results
+- `GET /api/download/{job_id}`: Download processed document
 
----
+### Command Line
 
-**Built with**: PyTorch, HuggingFace Transformers, FastAPI, Celery, Streamlit, OpenCV, pdfplumber
+For quick testing, use the test script:
+
+```bash
+python test_processor.py path/to/document.pdf
+```
+
+## Development
+
+### Adding New Processors
+
+1. Create a new processor class in `worker/pipeline/processors/`
+2. Implement the `process` method
+3. Register the processor in `worker/pipeline/pipeline_builder.py`
+
+### Running Tests
+
+```bash
+pytest tests
+```
+
+## License
+
+Proprietary - All Rights Reserved
+└── ...
+```
+
+## API Contract
+
+- `POST /upload` -> `{ job_id }`
+- `GET /status/{job_id}` -> `{ status, progress, preview }`
+- `GET /result/{job_id}` -> downloadable CSV/XLSX/JSON + provenance
+- `POST /webhooks/register` -> register callback
+- `GET /review/{job_id}` -> paginated review payload for UI
+- `POST /review/{job_id}` -> save corrected data
+- `POST /retrain-trigger` -> trigger retraining with accepted corrections
+
+## LLM Usage
+
+You are a strict normalizer. Input: OCR tokens with bbox and confidence. Output: JSON matching the schema. Do not invent missing values. If unsure, set needs_review=true. Output JSON only.

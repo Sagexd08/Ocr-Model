@@ -380,3 +380,272 @@ def create_download_link(data: bytes, filename: str, mime_type: str = "applicati
     """Create a download link for data."""
     b64_data = base64.b64encode(data).decode()
     return f'<a href="data:{mime_type};base64,{b64_data}" download="{filename}">📥 Download {filename}</a>'
+
+
+def visualize_document_image(image: Image.Image, results: Dict[str, Any], 
+                            show_overlay: bool = False, overlay_type: str = "bboxes") -> Image.Image:
+    """
+    Visualize document image with optional overlays.
+    
+    Args:
+        image: Source document image
+        results: OCR results data
+        show_overlay: Whether to show OCR overlay
+        overlay_type: Type of overlay to display
+        
+    Returns:
+        Visualized image
+    """
+    if image is None:
+        st.warning("No image available to display")
+        return None
+    
+    # Show image with optional overlay
+    if show_overlay and "ocr_results" in results:
+        return render_ocr_overlay(image, results["ocr_results"], overlay_type)
+    else:
+        return image
+
+
+def visualize_text_regions(image: Image.Image, results: Dict[str, Any], 
+                          confidence_threshold: float = 0.0) -> Image.Image:
+    """
+    Visualize text regions in the document.
+    
+    Args:
+        image: Source document image
+        results: OCR results data
+        confidence_threshold: Minimum confidence score to display
+        
+    Returns:
+        Image with text regions highlighted
+    """
+    if image is None or "ocr_results" not in results:
+        st.warning("No OCR data available to visualize")
+        return None
+    
+    # Create a copy of the image
+    output_image = image.copy()
+    draw = ImageDraw.Draw(output_image)
+    
+    # Get text regions
+    text_regions = results.get("layout_analysis", {}).get("text_regions", [])
+    
+    if not text_regions and "ocr_results" in results:
+        # Fallback to OCR tokens if no explicit text regions
+        tokens = results["ocr_results"].get("tokens", [])
+        
+        # Group tokens into regions (simplified approach)
+        lines = {}
+        for token in tokens:
+            confidence = token.get("confidence", 0)
+            if confidence < confidence_threshold:
+                continue
+                
+            bbox = token.get("bbox", [0, 0, 0, 0])
+            y_center = (bbox[1] + bbox[3]) / 2
+            line_key = int(y_center / 10) * 10  # Group by approx line
+            
+            if line_key not in lines:
+                lines[line_key] = {"x1": float('inf'), "y1": float('inf'), 
+                                  "x2": 0, "y2": 0, "tokens": []}
+            
+            # Expand line bbox
+            line = lines[line_key]
+            line["x1"] = min(line["x1"], bbox[0])
+            line["y1"] = min(line["y1"], bbox[1])
+            line["x2"] = max(line["x2"], bbox[2])
+            line["y2"] = max(line["y2"], bbox[3])
+            line["tokens"].append(token)
+        
+        # Convert lines to regions
+        text_regions = [
+            {"bbox": [line["x1"], line["y1"], line["x2"], line["y2"]],
+             "type": "text",
+             "confidence": sum(t.get("confidence", 0) for t in line["tokens"]) / len(line["tokens"])
+             if line["tokens"] else 0}
+            for line in lines.values()
+        ]
+    
+    # Draw regions
+    for region in text_regions:
+        bbox = region.get("bbox", [0, 0, 0, 0])
+        confidence = region.get("confidence", 0)
+        
+        if confidence < confidence_threshold:
+            continue
+            
+        # Draw text region
+        color = _get_confidence_color(confidence)
+        x1, y1, x2, y2 = [int(coord) for coord in bbox]
+        draw.rectangle([x1, y1, x2, y2], outline=color, width=2)
+    
+    return output_image
+
+
+def visualize_table_regions(image: Image.Image, results: Dict[str, Any]) -> Image.Image:
+    """
+    Visualize tables in the document.
+    
+    Args:
+        image: Source document image
+        results: OCR results data
+        
+    Returns:
+        Image with table regions highlighted
+    """
+    if image is None or "tables" not in results:
+        st.warning("No table data available to visualize")
+        return None
+    
+    # Create a copy of the image
+    output_image = image.copy()
+    draw = ImageDraw.Draw(output_image)
+    
+    # Draw table regions
+    tables = results.get("tables", [])
+    for i, table in enumerate(tables):
+        if "bbox" not in table:
+            continue
+            
+        bbox = table["bbox"]
+        x1, y1, x2, y2 = [int(coord) for coord in bbox]
+        
+        # Draw table outline
+        draw.rectangle([x1, y1, x2, y2], outline="#0066cc", width=3)
+        
+        # Add table number
+        draw.text((x1+5, y1+5), f"Table {i+1}", fill="#0066cc")
+        
+        # Draw cells if available
+        if "cells" in table:
+            for cell in table["cells"]:
+                if "bbox" in cell:
+                    cell_bbox = cell["bbox"]
+                    cx1, cy1, cx2, cy2 = [int(coord) for coord in cell_bbox]
+                    draw.rectangle([cx1, cy1, cx2, cy2], outline="#0066cc", width=1)
+    
+    return output_image
+
+
+def create_form_field_visualization(image: Image.Image, results: Dict[str, Any]) -> Image.Image:
+    """
+    Visualize form fields in the document.
+    
+    Args:
+        image: Source document image
+        results: OCR results data
+        
+    Returns:
+        Image with form fields highlighted
+    """
+    if image is None or "form_fields" not in results:
+        st.warning("No form field data available to visualize")
+        return None
+    
+    # Create a copy of the image
+    output_image = image.copy()
+    draw = ImageDraw.Draw(output_image)
+    
+    # Try to load a font
+    try:
+        font = ImageFont.truetype("arial.ttf", 12)
+    except:
+        font = ImageFont.load_default()
+    
+    # Draw form fields
+    form_fields = results.get("form_fields", [])
+    for field in form_fields:
+        # Get field data
+        field_name = field.get("name", "Unknown")
+        field_value = field.get("value", "")
+        confidence = field.get("confidence", 0.0)
+        
+        # Get bounding boxes
+        name_bbox = field.get("name_bbox", [0, 0, 0, 0])
+        value_bbox = field.get("value_bbox", [0, 0, 0, 0])
+        
+        # Convert to integers
+        name_x1, name_y1, name_x2, name_y2 = [int(coord) for coord in name_bbox]
+        value_x1, value_y1, value_x2, value_y2 = [int(coord) for coord in value_bbox]
+        
+        # Draw name box in blue
+        draw.rectangle([name_x1, name_y1, name_x2, name_y2], outline="#0066cc", width=2)
+        
+        # Draw value box with confidence-based color
+        color = _get_confidence_color(confidence)
+        draw.rectangle([value_x1, value_y1, value_x2, value_y2], outline=color, width=2)
+        
+        # Draw connection line between name and value
+        mid_name_y = (name_y1 + name_y2) // 2
+        mid_value_y = (value_y1 + value_y2) // 2
+        draw.line([name_x2, mid_name_y, value_x1, mid_value_y], fill="#0066cc", width=1)
+        
+        # Add field name above name box
+        draw.text((name_x1, name_y1-15), field_name, fill="#0066cc", font=font)
+    
+    return output_image
+
+
+def create_analytics_dashboard(analytics_data: Dict[str, Any]) -> None:
+    """
+    Create an analytics dashboard for document processing.
+    
+    Args:
+        analytics_data: Analytics data to visualize
+    """
+    st.subheader("📊 Analytics Dashboard")
+    
+    # Document processing metrics
+    col1, col2, col3 = st.columns(3)
+    
+    with col1:
+        st.metric(
+            label="Documents Processed", 
+            value=analytics_data.get("processed_docs", 0),
+            delta="+1" if analytics_data.get("processed_docs", 0) > 0 else None
+        )
+        
+    with col2:
+        success_rate = 0
+        if analytics_data.get("processed_docs", 0) > 0:
+            success_rate = (analytics_data.get("successful_docs", 0) / 
+                           analytics_data.get("processed_docs", 1)) * 100
+            
+        st.metric(
+            label="Success Rate", 
+            value=f"{success_rate:.1f}%"
+        )
+        
+    with col3:
+        avg_time = analytics_data.get("avg_processing_time", 0)
+        st.metric(
+            label="Avg. Processing Time", 
+            value=f"{avg_time:.2f}s"
+        )
+    
+    # Create processing metrics chart
+    metrics_data = {
+        "Successful": analytics_data.get("successful_docs", 0),
+        "Failed": analytics_data.get("failed_docs", 0)
+    }
+    
+    # Add processing time chart if we have data
+    if analytics_data.get("processing_times", []):
+        times = analytics_data.get("processing_times", [])
+        time_df = pd.DataFrame({
+            "Job": range(1, len(times) + 1),
+            "Processing Time (s)": times
+        })
+        
+        fig = px.line(
+            time_df, 
+            x="Job", 
+            y="Processing Time (s)",
+            title="Processing Time Trend"
+        )
+        
+        st.plotly_chart(fig, use_container_width=True)
+    else:
+        # Show placeholder
+        st.info("Process more documents to see performance trends")

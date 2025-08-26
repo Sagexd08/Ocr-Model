@@ -5,7 +5,6 @@ Handles loading, caching, and managing ML models for document processing.
 """
 
 import os
-import logging
 import threading
 from typing import Dict, Any, Optional
 from pathlib import Path
@@ -13,12 +12,62 @@ from pathlib import Path
 import torch
 import numpy as np
 from PIL import Image
+import cv2
+try:
+    import pytesseract
+except ImportError:
+    pytesseract = None
 
-logger = logging.getLogger(__name__)
+from .utils.logging import get_logger
+
+logger = get_logger(__name__)
+
+# Set default feature flags
+USE_GPU = True
+USE_ADVANCED_LAYOUT = True
+USE_TABLE_DETECTION = True
+LOAD_EASYOCR = False
+LOAD_TABLE_DETECTOR = False
+LOAD_LAYOUT_ANALYZER = False
+
+# Try to import feature flags if available
+try:
+    from common.feature_flags import (
+        USE_GPU, 
+        USE_ADVANCED_LAYOUT, 
+        USE_TABLE_DETECTION,
+        LOAD_EASYOCR,
+        LOAD_TABLE_DETECTOR,
+        LOAD_LAYOUT_ANALYZER
+    )
+except ImportError:
+    logger.info("Common feature flags not found, using defaults")
 
 
 class ModelManager:
     """Manages ML models for document processing."""
+    
+    # Default paths for models
+    DEFAULT_MODEL_PATHS = {
+        # OCR models
+        "ocr_detection": "models/ocr/detection.onnx",
+        "ocr_recognition": "models/ocr/recognition.onnx",
+        "ocr": "models/ocr",  # Base OCR model directory
+        
+        # Table detection models
+        "table_detection": "models/table_detector/model.onnx",
+        "table_structure": "models/table_detector/structure.onnx",
+        
+        # Document classification models
+        "document_classification": "models/document_classifier/model.onnx",
+        "feature_extraction": "models/document_classifier/extractor.onnx",
+        
+        # Layout analysis models
+        "layout_analysis": "models/layout/model.onnx",
+        
+        # Form field detection models
+        "form_detection": "models/form_detector/model.onnx"
+    }
     
     def __init__(self, models_path: str = "models"):
         self.models_path = Path(models_path)
@@ -37,6 +86,22 @@ class ModelManager:
         else:
             return "cpu"
     
+    def get_model_path(self, model_id: str) -> str:
+        """
+        Get the path to a specific model.
+        
+        Args:
+            model_id: Model identifier
+            
+        Returns:
+            Absolute path to the model file or directory
+        """
+        if model_id in self.DEFAULT_MODEL_PATHS:
+            return str(self.models_path / self.DEFAULT_MODEL_PATHS[model_id])
+        else:
+            logger.warning(f"Unknown model ID: {model_id}, using generic path")
+            return str(self.models_path / model_id)
+    
     def initialize_models(self):
         """Initialize all models."""
         logger.info("Initializing models...")
@@ -51,7 +116,7 @@ class ModelManager:
             
         except Exception as e:
             logger.error(f"Failed to initialize models: {str(e)}")
-            # Continue without models - they can be loaded on-demand
+            
     
     def _load_renderer_classifier(self):
         """Load the renderer classifier model."""
@@ -83,20 +148,23 @@ class ModelManager:
         try:
             from models.ocr_models import TesseractOCR, EasyOCR, OCRModelEnsemble
             
-            # Load Tesseract
+            
             tesseract_ocr = TesseractOCR()
             self.models["tesseract_ocr"] = tesseract_ocr
             logger.info("Tesseract OCR loaded")
             
-            # Load EasyOCR
-            try:
-                easyocr_model = EasyOCR(["en"], gpu=(self.device != "cpu"))
-                self.models["easyocr"] = easyocr_model
-                logger.info("EasyOCR loaded")
-            except Exception as e:
-                logger.warning(f"Failed to load EasyOCR: {str(e)}")
             
-            # Create ensemble
+            if LOAD_EASYOCR:
+                try:
+                    easyocr_model = EasyOCR(["en"], gpu=(self.device != "cpu"))
+                    self.models["easyocr"] = easyocr_model
+                    logger.info("EasyOCR loaded")
+                except Exception as e:
+                    logger.warning(f"Failed to load EasyOCR: {str(e)}")
+            else:
+                logger.info("Skipping EasyOCR per env flag")
+            
+            
             ocr_models = [self.models.get("tesseract_ocr")]
             if "easyocr" in self.models:
                 ocr_models.append(self.models["easyocr"])
@@ -118,11 +186,14 @@ class ModelManager:
             model = TableDetector()
             
             if model_path.exists():
-                # Load checkpoint if available
+                
                 pass
             
-            self.models["table_detector"] = model
-            logger.info("Table detector loaded")
+            if LOAD_TABLE_DETECTOR:
+                self.models["table_detector"] = model
+                logger.info("Table detector loaded")
+            else:
+                logger.info("Skipping table detector per env flag")
             
         except Exception as e:
             logger.error(f"Failed to load table detector: {str(e)}")
@@ -137,11 +208,14 @@ class ModelManager:
             model = LayoutAnalyzer()
             
             if model_path.exists():
-                # Load checkpoint if available
+                
                 pass
             
-            self.models["layout_analyzer"] = model
-            logger.info("Layout analyzer loaded")
+            if LOAD_LAYOUT_ANALYZER:
+                self.models["layout_analyzer"] = model
+                logger.info("Layout analyzer loaded")
+            else:
+                logger.info("Skipping layout analyzer per env flag")
             
         except Exception as e:
             logger.error(f"Failed to load layout analyzer: {str(e)}")
@@ -160,7 +234,7 @@ class ModelManager:
         model = self.get_model("renderer_classifier")
         
         if model is None:
-            # Fallback classification based on metadata
+            
             return self._fallback_classification(metadata)
         
         try:
@@ -201,16 +275,16 @@ class ModelManager:
     
     def extract_text_ocr(self, image: Image.Image, render_type: str) -> Dict[str, Any]:
         """Extract text using OCR models."""
-        # Choose best OCR model based on render type
+        
         if render_type in ["handwritten"]:
-            model_name = "easyocr"  # Better for handwritten text
+            model_name = "easyocr"
         else:
-            model_name = "ocr_ensemble"  # Use ensemble for best results
+            model_name = "ocr_ensemble"
         
         model = self.get_model(model_name)
         
         if model is None:
-            # Fallback to Tesseract
+            
             model = self.get_model("tesseract_ocr")
         
         if model is None:
