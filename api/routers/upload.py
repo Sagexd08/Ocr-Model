@@ -12,10 +12,11 @@ from fastapi.security import HTTPBearer
 from sqlalchemy.orm import Session
 
 from ..config import get_settings
-from ..database import get_db, Job
-from ..models import UploadResponse, JobStatus
+from ..database import get_db
+from ..models import Job, JobStatus
 from ..dependencies import get_current_user, rate_limit, validate_file
 from ..storage import upload_file_to_storage
+from ..schemas import UploadResponse  # Add this import (adjust path if needed)
 
 # Expose a Celery-like API for tests that patch api.routers.upload.process_document.delay
 class _ProcessDocumentProxy:
