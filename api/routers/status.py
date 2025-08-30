@@ -11,8 +11,8 @@ from sqlalchemy.orm import Session
 from sqlalchemy import desc
 
 from ..config import get_settings
-from ..database import get_db, Job
-from ..models import StatusResponse, JobResponse, JobStatus
+from ..database import get_db
+from ..models import Job, StatusResponse, JobResponse, JobStatus
 from ..dependencies import get_current_user
 
 logger = logging.getLogger(__name__)
@@ -44,28 +44,30 @@ async def get_job_status(
         
         # Calculate estimated completion time
         estimated_completion = None
-        if job.status == JobStatus.PROCESSING and job.progress > 0:
+        job_progress = getattr(job, 'progress', 0.0) or 0.0
+        if job.status == JobStatus.PROCESSING.value and job_progress > 0:
             elapsed_time = (datetime.utcnow() - job.created_at).total_seconds()
-            estimated_total_time = elapsed_time / job.progress
-            remaining_time = estimated_total_time - elapsed_time
+            estimated_total_time = elapsed_time / job_progress
+            remaining_time = max(0.0, estimated_total_time - elapsed_time)
             estimated_completion = datetime.utcnow() + timedelta(seconds=remaining_time)
-        
+
         # Get preview data if available
         preview = None
-        if job.processing_metadata and "preview" in job.processing_metadata:
-            preview = job.processing_metadata["preview"]
-        
+        processing_metadata = getattr(job, 'processing_metadata', {}) or {}
+        if isinstance(processing_metadata, dict) and "preview" in processing_metadata:
+            preview = processing_metadata["preview"]
+
         return StatusResponse(
             job_id=job.job_id,
             status=JobStatus(job.status),
-            progress=job.progress,
+            progress=job_progress,
             message=_get_status_message(job),
             created_at=job.created_at,
             updated_at=job.updated_at,
             estimated_completion=estimated_completion,
             preview=preview
         )
-        
+
     except HTTPException:
         raise
     except Exception as e:
@@ -105,15 +107,15 @@ async def list_jobs(
             job_response = JobResponse(
                 job_id=job.job_id,
                 status=JobStatus(job.status),
-                file_name=job.file_name,
-                file_size=job.file_size,
-                mime_type=job.mime_type,
-                render_type=job.render_type,
-                progress=job.progress,
+                file_name=getattr(job, 'file_name', None) or getattr(job, 'filename', None),
+                file_size=getattr(job, 'file_size', None),
+                mime_type=getattr(job, 'mime_type', None),
+                render_type=getattr(job, 'render_type', None),
+                progress=getattr(job, 'progress', None),
                 created_at=job.created_at,
                 updated_at=job.updated_at,
                 completed_at=job.completed_at,
-                error_message=job.error_message
+                error_message=getattr(job, 'error_message', None)
             )
             job_responses.append(job_response)
         
@@ -152,17 +154,17 @@ async def get_job_details(
         job_response = JobResponse(
             job_id=job.job_id,
             status=JobStatus(job.status),
-            file_name=job.file_name,
-            file_size=job.file_size,
-            mime_type=job.mime_type,
-            render_type=job.render_type,
-            progress=job.progress,
+            file_name=getattr(job, 'file_name', None) or getattr(job, 'filename', None),
+            file_size=getattr(job, 'file_size', None),
+            mime_type=getattr(job, 'mime_type', None),
+            render_type=getattr(job, 'render_type', None),
+            progress=getattr(job, 'progress', None),
             created_at=job.created_at,
             updated_at=job.updated_at,
             completed_at=job.completed_at,
-            error_message=job.error_message
+            error_message=getattr(job, 'error_message', None)
         )
-        
+
         # Add extraction results if completed
         if job.status == JobStatus.COMPLETED and job.extraction_results:
             from ..models import ExtractionResult, ExtractedRow, Provenance
@@ -262,24 +264,34 @@ async def cancel_job(
 
 def _get_status_message(job: Job) -> str:
     """Get a human-readable status message for a job."""
-    if job.status == JobStatus.PENDING:
+    status_val = job.status
+    try:
+        status_enum = JobStatus(status_val)
+    except Exception:
+        # If stored as plain string, coerce where possible
+        try:
+            status_enum = JobStatus(status_val.value)  # unlikely branch
+        except Exception:
+            status_enum = JobStatus.PENDING
+
+    progress = getattr(job, 'progress', 0.0) or 0.0
+
+    if status_enum == JobStatus.PENDING:
         return "Job is queued for processing"
-    elif job.status == JobStatus.PROCESSING:
-        if job.progress < 0.1:
+    elif status_enum == JobStatus.PROCESSING:
+        if progress < 0.1:
             return "Analyzing document structure..."
-        elif job.progress < 0.3:
+        elif progress < 0.3:
             return "Performing OCR extraction..."
-        elif job.progress < 0.7:
+        elif progress < 0.7:
             return "Detecting and extracting tables..."
-        elif job.progress < 0.9:
+        elif progress < 0.9:
             return "Post-processing and validation..."
         else:
             return "Finalizing results..."
-    elif job.status == JobStatus.COMPLETED:
+    elif status_enum == JobStatus.COMPLETED:
         return "Processing completed successfully"
-    elif job.status == JobStatus.FAILED:
-        return job.error_message or "Processing failed"
-    elif job.status == JobStatus.CANCELLED:
-        return "Job was cancelled"
+    elif status_enum == JobStatus.FAILED:
+        return getattr(job, 'error_message', None) or "Processing failed"
     else:
         return "Unknown status"

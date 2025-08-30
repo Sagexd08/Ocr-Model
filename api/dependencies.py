@@ -53,13 +53,9 @@ logger = logging.getLogger(__name__)
 security = HTTPBearer(auto_error=False)
 settings = get_settings()
 
-# Redis client for rate limiting (disabled in tests or when feature off)
-import os as _os
-if _os.getenv("CURIO_TEST_MODE", "0") == "1" or not settings.rate_limit_enabled:
-    redis_client = None
-    logger.info("Rate limiting disabled (test mode or config)")
-else:
-    redis_client = redis.from_url(settings.redis_url)
+# Rate limiting disabled globally for local/dev
+redis_client = None
+logger.info("Rate limiting disabled globally")
 
 
 async def get_current_user(
@@ -112,40 +108,8 @@ async def get_current_user(
 
 
 async def rate_limit(request: Request) -> None:
-    """
-    Rate limiting dependency.
-
-    Limits requests per minute based on client IP.
-    """
-    if not settings.rate_limit_enabled or redis_client is None:
-        # Avoid noisy logs during tests
-        return
-
-    client_ip = request.client.host
-    key = f"rate_limit:{client_ip}"
-
-    try:
-        # Get current request count
-        current_requests = redis_client.get(key)
-
-        if current_requests is None:
-            # First request from this IP
-            redis_client.setex(key, 60, 1)  # Set with 60 second expiry
-        else:
-            current_count = int(current_requests)
-
-            if current_count >= settings.rate_limit_requests_per_minute:
-                raise HTTPException(
-                    status_code=429,
-                    detail="Rate limit exceeded. Please try again later."
-                )
-
-            # Increment counter
-            redis_client.incr(key)
-
-    except Exception as e:
-        logger.warning(f"Rate limit backend error: {str(e)}")
-        # Continue without rate limiting if backend is unavailable
+    """Rate limiting globally disabled in this build."""
+    return
 
 
 async def validate_file(file: UploadFile) -> None:

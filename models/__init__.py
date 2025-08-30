@@ -5,15 +5,15 @@ This package contains all the model definitions and utilities for the CurioScan 
 """
 
 from .renderer_classifier import RendererClassifier
-from .ocr_models import OCRModelEnsemble, TesseractOCR, EasyOCR
+from .ocr_models import OCRModelEnsemble, TesseractOCR, PaddleOCRAdapter
 from .table_detector import TableDetector
 from .layout_analyzer import LayoutAnalyzer
 
 __all__ = [
     "RendererClassifier",
-    "OCRModelEnsemble", 
+    "OCRModelEnsemble",
     "TesseractOCR",
-    "EasyOCR",
+    "PaddleOCRAdapter",
     "TableDetector",
     "LayoutAnalyzer"
 ]

@@ -18,31 +18,31 @@ jobs:
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v4
-    
+
     - name: Set up Python
       uses: actions/setup-python@v4
       with:
         python-version: ${{ env.PYTHON_VERSION }}
-    
+
     - name: Install dependencies
       run: |
         python -m pip install --upgrade pip
         pip install black isort flake8 mypy pylint
         pip install -r requirements.txt
-    
+
     - name: Run Black (code formatting)
       run: black --check --diff .
-    
+
     - name: Run isort (import sorting)
       run: isort --check-only --diff .
-    
+
     - name: Run flake8 (linting)
       run: flake8 . --count --select=E9,F63,F7,F82 --show-source --statistics
-    
+
     - name: Run mypy (type checking)
       run: mypy --ignore-missing-imports .
       continue-on-error: true
-    
+
     - name: Run pylint (advanced linting)
       run: pylint --disable=all --enable=unused-import,unused-variable,undefined-variable .
       continue-on-error: true
@@ -52,25 +52,25 @@ jobs:
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v4
-    
+
     - name: Set up Python
       uses: actions/setup-python@v4
       with:
         python-version: ${{ env.PYTHON_VERSION }}
-    
+
     - name: Install security tools
       run: |
         python -m pip install --upgrade pip
         pip install safety bandit semgrep
-    
+
     - name: Run safety (dependency vulnerability scan)
       run: safety check --json
       continue-on-error: true
-    
+
     - name: Run bandit (security linting)
       run: bandit -r . -f json
       continue-on-error: true
-    
+
     - name: Run semgrep (security patterns)
       run: |
         python -m semgrep --config=auto .
@@ -82,36 +82,64 @@ jobs:
     strategy:
       matrix:
         python-version: ["3.9", "3.10", "3.11"]
-    
+
     steps:
     - uses: actions/checkout@v4
-    
+
     - name: Set up Python ${{ matrix.python-version }}
       uses: actions/setup-python@v4
       with:
         python-version: ${{ matrix.python-version }}
-    
+
     - name: Install system dependencies
       run: |
         sudo apt-get update
         sudo apt-get install -y tesseract-ocr libtesseract-dev poppler-utils
-    
+
     - name: Install Python dependencies
       run: |
+    - name: Generate deterministic sample and annotated PDF
+      run: |
+        python - <<'PY'
+        from PIL import Image, ImageDraw
+        from worker.pipeline.processors.exporter import Exporter, ExportFormat
+        from worker.types import Document, Page, Token, Bbox, Region
+        import os
+        os.makedirs('out_ci', exist_ok=True)
+        img = Image.new('RGB', (240, 120), color=(255,255,255))
+        d = ImageDraw.Draw(img)
+        d.text((10,10), 'CI', fill=(0,0,0))
+        page = Page(page_num=1, width=240, height=120, image=img,
+                    tokens=[Token(text='CI', bbox=Bbox(x1=8,y1=8,x2=32,y2=28), confidence=0.95)],
+                    regions=[Region(type='header', bbox=Bbox(x1=4,y1=4,x2=200,y2=40), confidence=0.8)])
+        doc = Document(pages=[page])
+        exporter = Exporter({"output_dir": "out_ci", "formats": {"pdf": {"format_type": "pdf"}}})
+        exporter._export_pdf(doc, "ci_deterministic", ExportFormat(format_type="pdf"))
+        PY
+
         python -m pip install --upgrade pip
         pip install -r requirements.txt
         pip install pytest pytest-cov pytest-xdist pytest-mock
-    
+
     - name: Run unit tests
       run: |
         pytest tests/unit/ -v --cov=. --cov-report=xml --cov-report=html -n auto
-    
+        pytest -q tests/test_visualization_overlays.py tests/test_exporter_pdf.py tests/test_smoke_annotation.py || true
+
     - name: Upload coverage to Codecov
       uses: codecov/codecov-action@v3
       with:
         file: ./coverage.xml
         flags: unittests
         name: codecov-umbrella
+
+    - name: Upload annotated PDF artifact (smoke)
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: annotated-pdf-smoke
+        path: out_ci/*.pdf
+        if-no-files-found: ignore
 
   # Integration Tests
   integration-tests:
@@ -129,7 +157,7 @@ jobs:
           --health-retries 5
         ports:
           - 5432:5432
-      
+
       redis:
         image: redis:7
         options: >-
@@ -139,26 +167,26 @@ jobs:
           --health-retries 5
         ports:
           - 6379:6379
-    
+
     steps:
     - uses: actions/checkout@v4
-    
+
     - name: Set up Python
       uses: actions/setup-python@v4
       with:
         python-version: ${{ env.PYTHON_VERSION }}
-    
+
     - name: Install system dependencies
       run: |
         sudo apt-get update
         sudo apt-get install -y tesseract-ocr libtesseract-dev poppler-utils
-    
+
     - name: Install Python dependencies
       run: |
         python -m pip install --upgrade pip
         pip install -r requirements.txt
         pip install pytest pytest-mock
-    
+
     - name: Run integration tests
       env:
         DATABASE_URL: postgresql://postgres:postgres@localhost:5432/curioscan_test
@@ -184,21 +212,21 @@ jobs:
           --health-retries 5
         ports:
           - 5432:5432
-    
+
     steps:
     - uses: actions/checkout@v4
-    
+
     - name: Set up Python
       uses: actions/setup-python@v4
       with:
         python-version: ${{ env.PYTHON_VERSION }}
-    
+
     - name: Install dependencies
       run: |
         python -m pip install --upgrade pip
         pip install -r requirements.txt
         pip install pytest httpx
-    
+
     - name: Start API server
       env:
         DATABASE_URL: postgresql://postgres:postgres@localhost:5432/curioscan_test
@@ -206,7 +234,7 @@ jobs:
       run: |
         uvicorn api.main:app --host 0.0.0.0 --port 8000 &
         sleep 10
-    
+
     - name: Run API tests
       run: |
         pytest tests/unit/test_api.py -v
@@ -216,22 +244,22 @@ jobs:
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v4
-    
+
     - name: Set up Docker Buildx
       uses: docker/setup-buildx-action@v3
-    
+
     - name: Build API Docker image
       run: |
         docker build -t curioscan-api:test -f api/Dockerfile .
-    
+
     - name: Build Worker Docker image
       run: |
         docker build -t curioscan-worker:test -f worker/Dockerfile .
-    
+
     - name: Build Streamlit Demo Docker image
       run: |
         docker build -t curioscan-demo:test -f streamlit_demo/Dockerfile .
-    
+
     - name: Test Docker images
       run: |
         docker run --rm curioscan-api:test python -c "import api.main; print('API import successful')"
@@ -242,21 +270,21 @@ jobs:
   performance-tests:
     runs-on: ubuntu-latest
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    
+
     steps:
     - uses: actions/checkout@v4
-    
+
     - name: Set up Python
       uses: actions/setup-python@v4
       with:
         python-version: ${{ env.PYTHON_VERSION }}
-    
+
     - name: Install dependencies
       run: |
         python -m pip install --upgrade pip
         pip install -r requirements.txt
         pip install pytest pytest-benchmark
-    
+
     - name: Run performance tests
       run: |
         pytest tests/performance/ -v --benchmark-only
@@ -267,17 +295,17 @@ jobs:
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v4
-    
+
     - name: Set up Python
       uses: actions/setup-python@v4
       with:
         python-version: ${{ env.PYTHON_VERSION }}
-    
+
     - name: Install documentation dependencies
       run: |
         python -m pip install --upgrade pip
         pip install sphinx sphinx-rtd-theme myst-parser
-    
+
     - name: Build documentation
       run: |
         cd docs
@@ -289,33 +317,33 @@ jobs:
     needs: [lint-and-format, unit-tests, integration-tests, docker-build]
     runs-on: ubuntu-latest
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    
+
     steps:
     - uses: actions/checkout@v4
-    
+
     - name: Set up Docker Buildx
       uses: docker/setup-buildx-action@v3
-    
+
     - name: Login to Docker Hub
       uses: docker/login-action@v3
       with:
         username: ${{ secrets.DOCKER_USERNAME }}
         password: ${{ secrets.DOCKER_PASSWORD }}
-    
+
     - name: Build and push Docker images
       run: |
         # Build and push API
         docker build -t curioscan/api:latest -f api/Dockerfile .
         docker push curioscan/api:latest
-        
+
         # Build and push Worker
         docker build -t curioscan/worker:latest -f worker/Dockerfile .
         docker push curioscan/worker:latest
-        
+
         # Build and push Demo
         docker build -t curioscan/demo:latest -f streamlit_demo/Dockerfile .
         docker push curioscan/demo:latest
-    
+
     - name: Deploy to staging
       run: |
         echo "Deploying to staging environment..."
@@ -327,35 +355,35 @@ jobs:
     needs: [lint-and-format, unit-tests, integration-tests, docker-build]
     runs-on: ubuntu-latest
     if: github.event_name == 'release'
-    
+
     steps:
     - uses: actions/checkout@v4
-    
+
     - name: Set up Docker Buildx
       uses: docker/setup-buildx-action@v3
-    
+
     - name: Login to Docker Hub
       uses: docker/login-action@v3
       with:
         username: ${{ secrets.DOCKER_USERNAME }}
         password: ${{ secrets.DOCKER_PASSWORD }}
-    
+
     - name: Get release version
       id: get_version
       run: echo "VERSION=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
-    
+
     - name: Build and push release images
       run: |
         # Build and push versioned images
         docker build -t curioscan/api:${{ steps.get_version.outputs.VERSION }} -f api/Dockerfile .
         docker push curioscan/api:${{ steps.get_version.outputs.VERSION }}
-        
+
         docker build -t curioscan/worker:${{ steps.get_version.outputs.VERSION }} -f worker/Dockerfile .
         docker push curioscan/worker:${{ steps.get_version.outputs.VERSION }}
-        
+
         docker build -t curioscan/demo:${{ steps.get_version.outputs.VERSION }} -f streamlit_demo/Dockerfile .
         docker push curioscan/demo:${{ steps.get_version.outputs.VERSION }}
-    
+
     - name: Deploy to production
       run: |
         echo "Deploying version ${{ steps.get_version.outputs.VERSION }} to production..."

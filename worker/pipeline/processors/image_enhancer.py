@@ -15,20 +15,6 @@ import base64
 from ...types import Document, Page
 from ...utils.logging import get_logger, log_execution_time
 
-logger = get_logger(__name__)ort Dict, Any, Optional, List, Tuple, Union
-import numpy as np
-import cv2
-from scipy import stats
-from sklearn.cluster import DBSCAN
-from skimage.transform import radon, rotate
-import torch
-from PIL import Image
-from io import BytesIO
-import base64
-
-from ...types import Document, Page
-from ...utils.logging import get_logger, log_execution_time
-
 logger = get_logger(__name__)
 
 class ImageEnhancer:
