@@ -6,14 +6,19 @@ import os
 from functools import lru_cache
 from typing import List, Optional
 try:
-    from pydantic_settings import BaseSettings
+    from pydantic_settings import BaseSettings, SettingsConfigDict
 except ImportError:
     from pydantic import BaseSettings
+    SettingsConfigDict = None  # type: ignore
 from pydantic import Field
 
 
 class Settings(BaseSettings):
     """Application settings."""
+
+    # For Pydantic v2: ignore extra env keys; for v1, fallback class Config below
+    if 'SettingsConfigDict' in globals() and SettingsConfigDict is not None:  # type: ignore[name-defined]
+        model_config = SettingsConfigDict(env_file=".env", case_sensitive=False, extra="ignore")  # type: ignore[assignment]
 
     # API Configuration
     api_host: str = Field(default="0.0.0.0", env="API_HOST")
@@ -23,7 +28,7 @@ class Settings(BaseSettings):
 
     # Database Configuration
     database_url: str = Field(
-        default="sqlite+pysqlite:///data/curioscan.db",
+        default="sqlite+pysqlite:///./curioscan.db",
         env="DATABASE_URL"
     )
 
@@ -101,9 +106,12 @@ class Settings(BaseSettings):
     load_table_detector: bool = Field(default=True, env="LOAD_TABLE_DETECTOR")
     load_layout_analyzer: bool = Field(default=True, env="LOAD_LAYOUT_ANALYZER")
 
-    class Config:
-        env_file = ".env"
-        case_sensitive = False
+    # Only define legacy Config when Pydantic v1 is used (no pydantic_settings available)
+    if 'SettingsConfigDict' in globals() and SettingsConfigDict is None:  # type: ignore[name-defined]
+        class Config:
+            env_file = ".env"
+            case_sensitive = False
+            extra = "ignore"
 
 @lru_cache()
 def get_settings() -> Settings:

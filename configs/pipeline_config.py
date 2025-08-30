@@ -8,6 +8,18 @@ pipeline_config = {
     "default": {
         "processors": [
             {
+                "id": "pdf_processor.PDFProcessor",
+                "params": {}
+            },
+            {
+                "id": "image_ingestion.ImageIngestion",
+                "params": {}
+            },
+            {
+                "id": "advanced_ocr.AdvancedOCRProcessor",
+                "params": {}
+            },
+            {
                 "id": "image_enhancer.ImageEnhancer",
                 "params": {
                     "deskew_enabled": True,
@@ -31,6 +43,12 @@ pipeline_config = {
                     "region_types": ["paragraph", "heading", "list", "table", "image", "footer", "header"],
                     "min_region_size": 50,
                     "max_vertical_gap": 20
+                }
+            },
+            {
+                "id": "region_classifier.RegionClassifierProcessor",
+                "params": {
+                    "score_threshold": 0.4
                 }
             },
             {
@@ -104,6 +122,18 @@ pipeline_config = {
     "performance": {
         "processors": [
             {
+                "id": "pdf_processor.PDFProcessor",
+                "params": {}
+            },
+            {
+                "id": "image_ingestion.ImageIngestion",
+                "params": {}
+            },
+            {
+                "id": "advanced_ocr.AdvancedOCRProcessor",
+                "params": {}
+            },
+            {
                 "id": "image_enhancer.ImageEnhancer",
                 "params": {
                     "deskew_enabled": True,
@@ -118,6 +148,12 @@ pipeline_config = {
                     "region_types": ["paragraph", "heading", "table"],
                     "min_region_size": 100,
                     "max_vertical_gap": 30
+                }
+            },
+            {
+                "id": "region_classifier.RegionClassifierProcessor",
+                "params": {
+                    "score_threshold": 0.5
                 }
             },
             {
@@ -148,6 +184,18 @@ pipeline_config = {
     "quality": {
         "processors": [
             {
+                "id": "pdf_processor.PDFProcessor",
+                "params": {}
+            },
+            {
+                "id": "image_ingestion.ImageIngestion",
+                "params": {}
+            },
+            {
+                "id": "advanced_ocr.AdvancedOCRProcessor",
+                "params": {}
+            },
+            {
                 "id": "image_enhancer.ImageEnhancer",
                 "params": {
                     "deskew_enabled": True,
@@ -172,6 +220,12 @@ pipeline_config = {
                     "region_types": ["paragraph", "heading", "subheading", "list", "table", "image", "footer", "header", "caption"],
                     "min_region_size": 30,
                     "max_vertical_gap": 15
+                }
+            },
+            {
+                "id": "region_classifier.RegionClassifierProcessor",
+                "params": {
+                    "score_threshold": 0.4
                 }
             },
             {

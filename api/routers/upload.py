@@ -13,10 +13,9 @@ from sqlalchemy.orm import Session
 
 from ..config import get_settings
 from ..database import get_db
-from ..models import Job, JobStatus
+from ..models import Job, JobStatus, UploadResponse
 from ..dependencies import get_current_user, rate_limit, validate_file
 from ..storage import upload_file_to_storage
-from ..schemas import UploadResponse  # Add this import (adjust path if needed)
 
 # Expose a Celery-like API for tests that patch api.routers.upload.process_document.delay
 class _ProcessDocumentProxy:
@@ -59,6 +58,8 @@ async def upload_file(
     background_tasks: BackgroundTasks,
     file: UploadFile = File(...),
     confidence_threshold: Optional[float] = None,
+    mode: Optional[str] = None,
+    max_pages: Optional[int] = None,
     db: Session = Depends(get_db),
     current_user: Optional[dict] = Depends(get_current_user),
     _: None = Depends(rate_limit)
@@ -92,18 +93,11 @@ async def upload_file(
             f"input/{job_id}/{file.filename}"
         )
 
-        # Create job record
+        # Create job record (minimal fields to match current DB schema)
         job = Job(
             job_id=job_id,
-            status=JobStatus.PENDING,
-            file_name=file.filename,
-            file_size=file_size,
-            mime_type=file.content_type,
-            input_path=input_path,
-            processing_metadata={
-                "confidence_threshold": confidence_threshold or settings.default_confidence_threshold,
-                "uploaded_by": current_user.get("user_id") if current_user else "anonymous"
-            }
+            status=JobStatus.PENDING.value,
+            filename=file.filename,
         )
 
         db.add(job)
@@ -122,7 +116,8 @@ async def upload_file(
 
         return UploadResponse(
             job_id=job_id,
-            status=JobStatus.PENDING,
+            filename=file.filename,
+            status=JobStatus.PENDING.value,
             message="File uploaded successfully and queued for processing"
         )
 
@@ -146,10 +141,21 @@ async def queue_processing_task(
         # Import here to avoid circular imports
         from ..celery_app import celery_app
 
-        # Queue the processing task
+        # Queue the processing task (match worker.tasks registered name)
+        params = {
+            'mode': (mode or 'STANDARD'),
+            'extract_tables': False,
+            'classify_document': False,
+            'extract_forms': False,
+            'analyze_layout': False,
+            'output_format': 'json',
+            'confidence_threshold': confidence_threshold or settings.default_confidence_threshold,
+            'fast': True,
+            'max_pages': int(max_pages) if max_pages is not None else 5
+        }
         task = celery_app.send_task(
-            'worker.tasks.process_document',
-            args=[job_id, input_path, confidence_threshold],
+            'process_document',
+            args=[job_id, input_path, params],
             queue='default'
         )
 

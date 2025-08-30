@@ -223,13 +223,17 @@ def _update_job_status(job_id: str, status: JobStatus, result_path: Optional[str
     # Update status in database
     db = SessionLocal()
     try:
-        job = db.query(models.Job).filter(models.Job.id == job_id).first()
+        job = db.query(models.Job).filter(models.Job.job_id == job_id).first()
         if job:
             job.status = status.value
+            # Persist result path in processing_metadata for now (no dedicated column)
             if result_path:
-                job.result_path = result_path
+                meta = job.processing_metadata or {}
+                if isinstance(meta, dict):
+                    meta["result_path"] = result_path
+                    job.processing_metadata = meta
             if error:
-                job.error = error
+                job.error_message = error
             db.commit()
     finally:
         db.close()

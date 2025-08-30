@@ -21,24 +21,30 @@ class ExportFormat(BaseModel):
     structure_preserving: bool = Field(True, description="Preserve document structure")
     schema: Optional[Dict[str, Any]] = Field(None, description="Output schema definition")
 
+    # PDF annotation toggles
+    show_tokens: bool = Field(True, description="Show OCR token boxes in annotated PDF")
+    show_regions: bool = Field(True, description="Show classified regions in annotated PDF")
+    show_region_labels: bool = Field(True, description="Show labels for classified regions")
+    show_confidence_legend: bool = Field(True, description="Append a legend page for confidence and colors")
+
 
 class Exporter:
     """
     Document exporter that converts processed OCR results to various output formats.
     Supports JSON, CSV, XML, PDF with annotations, and custom formats.
     """
-    
+
     def __init__(self, config: Dict[str, Any] = None):
         self.config = config or {}
         self.output_dir = self.config.get("output_dir", "output")
         self.default_format = self.config.get("default_format", "json")
-        
+
         # Configure export formats from config
         self.export_formats = {}
         formats_config = self.config.get("formats", {})
         for format_name, format_config in formats_config.items():
             self.export_formats[format_name] = ExportFormat(**format_config)
-        
+
         # Ensure at least one default format exists
         if not self.export_formats:
             self.export_formats["json"] = ExportFormat(
@@ -48,19 +54,19 @@ class Exporter:
                 include_metadata=True,
                 structure_preserving=True
             )
-        
+
         # Ensure output directory exists
         os.makedirs(self.output_dir, exist_ok=True)
-    
+
     @log_execution_time
     def export(self, document: Document, format_name: Optional[str] = None) -> Dict[str, str]:
         """
         Export document to specified format.
-        
+
         Args:
             document: Processed document to export
             format_name: Name of format to use (defaults to default_format)
-            
+
         Returns:
             Dict with file paths for exported documents
         """
@@ -68,16 +74,16 @@ class Exporter:
         if format_name not in self.export_formats:
             logger.warning(f"Format {format_name} not found, using {self.default_format}")
             format_name = self.default_format
-            
+
         export_format = self.export_formats[format_name]
-        
+
         logger.info(f"Exporting document {document.id} to {format_name} format")
-        
+
         try:
             # Generate export filename
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
             filename_base = f"{document.id}_{timestamp}"
-            
+
             # Export based on format type
             if export_format.format_type == "json":
                 filepath = self._export_json(document, filename_base, export_format)
@@ -89,58 +95,60 @@ class Exporter:
                 filepath = self._export_pdf(document, filename_base, export_format)
             elif export_format.format_type == "txt":
                 filepath = self._export_txt(document, filename_base, export_format)
+            elif export_format.format_type in ("excel", "xlsx"):
+                filepath = self._export_excel(document, filename_base, export_format)
             else:
                 logger.error(f"Unsupported export format: {export_format.format_type}")
                 return {}
-                
+
             return {format_name: filepath}
-            
+
         except Exception as e:
             logger.error(f"Error exporting document {document.id}: {str(e)}")
             return {}
-    
+
     def _export_json(self, document: Document, filename_base: str, format_config: ExportFormat) -> str:
         """Export document to JSON format"""
         filepath = os.path.join(self.output_dir, f"{filename_base}.json")
-        
+
         # Convert document to dict representation
         doc_dict = document.dict()
-        
+
         # Apply format configuration
         if not format_config.include_confidence:
             self._remove_confidence_scores(doc_dict)
-            
+
         if not format_config.include_bbox:
             self._remove_bboxes(doc_dict)
-            
+
         if not format_config.include_metadata:
             doc_dict.pop("metadata", None)
-        
+
         # Write to file
         with open(filepath, 'w', encoding='utf-8') as f:
             json.dump(doc_dict, f, indent=2, ensure_ascii=False)
-            
+
         logger.info(f"Exported JSON to {filepath}")
         return filepath
-    
+
     def _export_csv(self, document: Document, filename_base: str, format_config: ExportFormat) -> str:
         """Export document to CSV format"""
         import csv
-        
+
         filepath = os.path.join(self.output_dir, f"{filename_base}.csv")
-        
+
         # For CSV, we flatten the document structure
         rows = []
-        
+
         # Add header
         headers = ["page_num", "region_type", "text"]
         if format_config.include_bbox:
             headers.extend(["x1", "y1", "x2", "y2"])
         if format_config.include_confidence:
             headers.append("confidence")
-            
+
         rows.append(headers)
-        
+
         # Add document content
         for page in document.pages:
             # Add regions
@@ -150,7 +158,7 @@ class Exporter:
                     region.type,
                     region.text
                 ]
-                
+
                 if format_config.include_bbox:
                     row.extend([
                         region.bbox.x1,
@@ -158,25 +166,25 @@ class Exporter:
                         region.bbox.x2,
                         region.bbox.y2
                     ])
-                    
+
                 if format_config.include_confidence:
                     row.append(region.confidence)
-                    
+
                 rows.append(row)
-                
+
             # Add tables
             for table in page.tables:
                 for row_idx, cells in enumerate(table.cells):
                     for col_idx, cell in enumerate(cells):
                         if not cell or not cell.text:
                             continue
-                            
+
                         row = [
                             page.page_num,
                             f"table_cell_{table.id}_r{row_idx}_c{col_idx}",
                             cell.text
                         ]
-                        
+
                         if format_config.include_bbox:
                             row.extend([
                                 cell.bbox.x1,
@@ -184,31 +192,85 @@ class Exporter:
                                 cell.bbox.x2,
                                 cell.bbox.y2
                             ])
-                            
+
                         if format_config.include_confidence:
                             row.append(cell.confidence)
-                            
+
                         rows.append(row)
-        
+
         # Write to file
         with open(filepath, 'w', newline='', encoding='utf-8') as f:
             writer = csv.writer(f)
             writer.writerows(rows)
-            
-        logger.info(f"Exported CSV to {filepath}")
+
+    def _export_excel(self, document: Document, filename_base: str, format_config: ExportFormat) -> str:
+        """Export document to Excel (.xlsx) format using pandas if available."""
+        filepath = os.path.join(self.output_dir, f"{filename_base}.xlsx")
+        try:
+            import pandas as pd
+        except Exception:
+            # Fallback: write CSV with .xlsx extension (still consumable by Excel but not native)
+            logger.warning("pandas not installed; falling back to CSV renamed as .xlsx")
+            csv_path = self._export_csv(document, filename_base, format_config)
+            try:
+                os.replace(csv_path, filepath)
+            except Exception:
+                filepath = csv_path  # keep CSV if rename fails
+            return filepath
+
+        # Build flat rows similar to CSV exporter
+        rows = []
+        headers = ["page_num", "region_type", "text"]
+        if format_config.include_bbox:
+            headers.extend(["x1", "y1", "x2", "y2"])
+        if format_config.include_confidence:
+            headers.append("confidence")
+
+        for page in document.pages:
+            for region in page.regions:
+                row = [page.page_num, region.type, region.text]
+                if format_config.include_bbox:
+                    row.extend([region.bbox.x1, region.bbox.y1, region.bbox.x2, region.bbox.y2])
+                if format_config.include_confidence:
+                    row.append(region.confidence)
+                rows.append(row)
+            for table in page.tables:
+                for row_idx, cells in enumerate(table.cells):
+                    for col_idx, cell in enumerate(cells):
+                        if not cell or not cell.text:
+                            continue
+                        row = [page.page_num, f"table_cell_{table.id}_r{row_idx}_c{col_idx}", cell.text]
+                        if format_config.include_bbox:
+                            row.extend([cell.bbox.x1, cell.bbox.y1, cell.bbox.x2, cell.bbox.y2])
+                        if format_config.include_confidence:
+                            row.append(cell.confidence)
+                        rows.append(row)
+
+        # Create DataFrame and save to Excel
+        try:
+            df = pd.DataFrame(rows, columns=headers)
+            with pd.ExcelWriter(filepath, engine="openpyxl") as writer:
+                df.to_excel(writer, index=False, sheet_name="Extracted")
+        except Exception as e:
+            logger.error(f"Excel export failed: {e}. Falling back to CSV.")
+            csv_path = os.path.join(self.output_dir, f"{filename_base}.csv")
+            df.to_csv(csv_path, index=False)
+            filepath = csv_path
+
+        logger.info(f"Exported Excel to {filepath}")
         return filepath
-    
+
     def _export_xml(self, document: Document, filename_base: str, format_config: ExportFormat) -> str:
         """Export document to XML format"""
         import xml.etree.ElementTree as ET
         from xml.dom import minidom
-        
+
         filepath = os.path.join(self.output_dir, f"{filename_base}.xml")
-        
+
         # Create XML structure
         root = ET.Element("Document")
         root.set("id", str(document.id))
-        
+
         # Add metadata if configured
         if format_config.include_metadata and document.metadata:
             metadata_elem = ET.SubElement(root, "Metadata")
@@ -221,20 +283,20 @@ class Exporter:
                 else:
                     meta_item = ET.SubElement(metadata_elem, key)
                     meta_item.text = str(value)
-        
+
         # Add pages
         pages_elem = ET.SubElement(root, "Pages")
         for page in document.pages:
             page_elem = ET.SubElement(pages_elem, "Page")
             page_elem.set("number", str(page.page_num))
-            
+
             # Add regions
             regions_elem = ET.SubElement(page_elem, "Regions")
             for region in page.regions:
                 region_elem = ET.SubElement(regions_elem, "Region")
                 region_elem.set("type", region.type)
                 region_elem.set("id", str(region.id))
-                
+
                 # Add bounding box if configured
                 if format_config.include_bbox:
                     bbox_elem = ET.SubElement(region_elem, "BoundingBox")
@@ -242,90 +304,201 @@ class Exporter:
                     bbox_elem.set("y1", str(region.bbox.y1))
                     bbox_elem.set("x2", str(region.bbox.x2))
                     bbox_elem.set("y2", str(region.bbox.y2))
-                
+
                 # Add confidence if configured
                 if format_config.include_confidence:
                     region_elem.set("confidence", str(region.confidence))
-                
+
                 # Add text content
                 text_elem = ET.SubElement(region_elem, "Text")
                 text_elem.text = region.text
-            
+
             # Add tables
             tables_elem = ET.SubElement(page_elem, "Tables")
             for table in page.tables:
                 table_elem = ET.SubElement(tables_elem, "Table")
                 table_elem.set("id", str(table.id))
-                
+
                 rows_elem = ET.SubElement(table_elem, "Rows")
                 for row_idx, cells in enumerate(table.cells):
                     row_elem = ET.SubElement(rows_elem, "Row")
                     row_elem.set("index", str(row_idx))
-                    
+
                     for col_idx, cell in enumerate(cells):
                         if cell:
                             cell_elem = ET.SubElement(row_elem, "Cell")
                             cell_elem.set("col", str(col_idx))
-                            
+
                             if format_config.include_bbox:
                                 bbox_elem = ET.SubElement(cell_elem, "BoundingBox")
                                 bbox_elem.set("x1", str(cell.bbox.x1))
                                 bbox_elem.set("y1", str(cell.bbox.y1))
                                 bbox_elem.set("x2", str(cell.bbox.x2))
                                 bbox_elem.set("y2", str(cell.bbox.y2))
-                            
+
                             if format_config.include_confidence:
                                 cell_elem.set("confidence", str(cell.confidence))
-                            
+
                             text_elem = ET.SubElement(cell_elem, "Text")
                             text_elem.text = cell.text
-        
+
         # Write to file with pretty formatting
         xml_str = ET.tostring(root, encoding='utf-8')
         parsed_xml = minidom.parseString(xml_str)
         pretty_xml = parsed_xml.toprettyxml(indent="  ")
-        
+
         with open(filepath, 'w', encoding='utf-8') as f:
             f.write(pretty_xml)
-            
+
         logger.info(f"Exported XML to {filepath}")
         return filepath
-    
+
     def _export_pdf(self, document: Document, filename_base: str, format_config: ExportFormat) -> str:
         """
-        Export to PDF with annotations.
-        Note: This would require additional libraries like reportlab or PyMuPDF.
+        Export a native annotated PDF using PyMuPDF (fitz).
+        Overlays include:
+        - OCR tokens/regions as bounding boxes
+        - Classified regions with labels and colors
+        - Confidence color coding (tokens filled or stroked by confidence)
         """
         filepath = os.path.join(self.output_dir, f"{filename_base}_annotated.pdf")
-        
-        # For demonstration purposes only
-        # In a production system, this would create a PDF with the original
-        # document images and overlay the extracted text and regions
-        
-        logger.warning("PDF export is not fully implemented")
-        
-        with open(filepath, 'w', encoding='utf-8') as f:
-            f.write("PDF export not fully implemented")
-            
-        logger.info(f"Exported PDF placeholder to {filepath}")
+
+        try:
+            import fitz  # PyMuPDF
+            from PIL import Image
+            import io
+        except Exception as e:
+            logger.error(f"PyMuPDF (fitz) not available for PDF export: {e}")
+            return ""
+
+        # Color utilities
+        def conf_color(c: float) -> tuple:
+            # Map confidence [0,1] -> red(0) to green(1)
+            c = max(0.0, min(1.0, float(c)))
+            r = 1.0 - c
+            g = c
+            b = 0.0
+            return (r, g, b)
+
+        REGION_COLORS = {
+            "header": (0.0, 0.55, 0.8),
+            "footer": (0.0, 0.4, 0.6),
+            "paragraph": (0.2, 0.8, 0.2),
+            "title": (0.8, 0.2, 0.8),
+            "subheading": (0.6, 0.3, 0.8),
+            "list": (0.8, 0.5, 0.2),
+            "table": (0.8, 0.2, 0.2),
+            "figure": (0.6, 0.6, 0.2),
+            "image": (0.2, 0.6, 0.8),
+            "region": (0.2, 0.2, 0.2),
+        }
+
+        pdf = fitz.open()
+
+        for page in document.pages:
+            # Determine page size
+            width = int(page.width or 0)
+            height = int(page.height or 0)
+            pil_img = None
+
+            # Try to get image to size page and as background
+            try:
+                if page.image is not None:
+                    if isinstance(page.image, str):
+                        pil_img = Image.open(page.image).convert("RGB")
+                    elif isinstance(page.image, Image.Image):
+                        pil_img = page.image
+                    else:
+                        pil_img = Image.fromarray(page.image).convert("RGB")
+                    if width == 0 or height == 0:
+                        width, height = pil_img.size
+            except Exception:
+                pil_img = None
+
+            if width == 0 or height == 0:
+                # Fallback to A4 points
+                width, height = 595, 842
+
+            pdf_page = pdf.new_page(width=width, height=height)
+
+            # Draw background image if present
+            if pil_img is not None:
+                with io.BytesIO() as buf:
+                    pil_img.save(buf, format="PNG")
+                    img_bytes = buf.getvalue()
+                rect = fitz.Rect(0, 0, width, height)
+                pdf_page.insert_image(rect, stream=img_bytes)
+
+            # Draw classified regions
+            if getattr(format_config, "show_regions", True):
+                try:
+                    for region in getattr(page, "regions", []) or []:
+                        x1, y1, x2, y2 = region.bbox.x1, region.bbox.y1, region.bbox.x2, region.bbox.y2
+                        rect = fitz.Rect(float(x1), float(y1), float(x2), float(y2))
+                        color = REGION_COLORS.get(region.type, REGION_COLORS["region"])
+                        # Stroke rectangle
+                        pdf_page.draw_rect(rect, color=color, width=1.0)
+                        # Label
+                        if getattr(format_config, "show_region_labels", True):
+                            label = f"{region.type}"
+                            try:
+                                pdf_page.insert_text((rect.x0 + 2, max(0, rect.y0 - 10)), label, color=color, fontsize=8)
+                            except Exception:
+                                pass
+                except Exception as e:
+                    logger.debug(f"Region overlay failed: {e}")
+
+            # Draw OCR tokens with confidence coloring
+            if getattr(format_config, "show_tokens", True):
+                try:
+                    for tok in getattr(page, "tokens", []) or []:
+                        x1, y1, x2, y2 = tok.bbox.x1, tok.bbox.y1, tok.bbox.x2, tok.bbox.y2
+                        rect = fitz.Rect(float(x1), float(y1), float(x2), float(y2))
+                        color = conf_color(getattr(tok, "confidence", 0.0))
+                        # Try filled rectangle with transparency; fall back to stroke only
+                        drew = False
+                        try:
+                            pdf_page.draw_rect(rect, color=color, fill=color)
+                            drew = True
+                        except Exception:
+                            pass
+                        if not drew:
+                            pdf_page.draw_rect(rect, color=color, width=0.6)
+                except Exception as e:
+                    logger.debug(f"Token overlay failed: {e}")
+
+        # Append a legend page if configured
+        if getattr(format_config, "show_confidence_legend", True):
+            legend = pdf.new_page(width=595, height=842)
+            legend.insert_text((40, 40), "Annotation Legend", fontsize=16, color=(0, 0, 0))
+            legend.insert_text((40, 70), "OCR confidence: red (low) -> green (high)", fontsize=10, color=(0, 0, 0))
+            y = 100
+            for name, col in REGION_COLORS.items():
+                legend.draw_rect(fitz.Rect(40, y, 160, y + 18), color=col, fill=None)
+                legend.insert_text((170, y + 13), name, fontsize=10, color=(0, 0, 0))
+                y += 22
+
+        pdf.save(filepath)
+        pdf.close()
+        logger.info(f"Exported annotated PDF to {filepath}")
         return filepath
-    
+
     def _export_txt(self, document: Document, filename_base: str, format_config: ExportFormat) -> str:
         """Export document to plain text format"""
         filepath = os.path.join(self.output_dir, f"{filename_base}.txt")
-        
+
         text_content = []
-        
+
         # Add document title if available
         if "title" in document.metadata:
             text_content.append(f"# {document.metadata['title']}")
             text_content.append("")
-        
+
         # Add document content
         for page in document.pages:
             text_content.append(f"=== Page {page.page_num} ===")
             text_content.append("")
-            
+
             # Add regions, preserving structure
             for region in page.regions:
                 if format_config.structure_preserving:
@@ -342,20 +515,20 @@ class Exporter:
                         text_content.append(region.text)
                 else:
                     text_content.append(region.text)
-                
+
                 text_content.append("")
-            
+
             # Add tables as text
             for table_idx, table in enumerate(page.tables):
                 text_content.append(f"Table {table_idx + 1}:")
-                
+
                 # Calculate column widths for better formatting
                 col_widths = [0] * (max(len(row) for row in table.cells) if table.cells else 0)
                 for row in table.cells:
                     for i, cell in enumerate(row):
                         if cell and cell.text:
                             col_widths[i] = max(col_widths[i], len(cell.text))
-                
+
                 # Add table content
                 for row in table.cells:
                     row_text = "|"
@@ -364,63 +537,63 @@ class Exporter:
                             text = cell.text if cell and cell.text else ""
                             row_text += f" {text.ljust(col_widths[i])} |"
                     text_content.append(row_text)
-                
+
                 text_content.append("")
-            
+
             text_content.append("")
-        
+
         # Write to file
         with open(filepath, 'w', encoding='utf-8') as f:
             f.write('\n'.join(text_content))
-            
+
         logger.info(f"Exported TXT to {filepath}")
         return filepath
-    
+
     def _remove_confidence_scores(self, doc_dict: Dict[str, Any]):
         """Remove confidence scores from document dict"""
         # Remove document level confidence
         doc_dict.pop("confidence", None)
-        
+
         # Remove page level confidences
         for page in doc_dict.get("pages", []):
             page.pop("confidence", None)
-            
+
             # Remove region confidences
             for region in page.get("regions", []):
                 region.pop("confidence", None)
-                
+
                 # Remove token confidences
                 for token in region.get("tokens", []):
                     token.pop("confidence", None)
-            
+
             # Remove table confidences
             for table in page.get("tables", []):
                 table.pop("confidence", None)
-                
+
                 # Remove cell confidences
                 for row in table.get("cells", []):
                     for cell in row:
                         if cell:
                             cell.pop("confidence", None)
-    
+
     def _remove_bboxes(self, doc_dict: Dict[str, Any]):
         """Remove bounding boxes from document dict"""
         # Remove page bbox
         for page in doc_dict.get("pages", []):
             page.pop("bbox", None)
-            
+
             # Remove region bboxes
             for region in page.get("regions", []):
                 region.pop("bbox", None)
-                
+
                 # Remove token bboxes
                 for token in region.get("tokens", []):
                     token.pop("bbox", None)
-            
+
             # Remove table bboxes
             for table in page.get("tables", []):
                 table.pop("bbox", None)
-                
+
                 # Remove cell bboxes
                 for row in table.get("cells", []):
                     for cell in row:

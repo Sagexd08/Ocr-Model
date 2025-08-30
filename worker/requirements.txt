@@ -9,3 +9,5 @@ minio
 sqlalchemy
 python-docx
 scikit-image
+
+paddleocr>=2.7.0  # optional; requires paddlepaddle (see docs/install_paddleocr.md)

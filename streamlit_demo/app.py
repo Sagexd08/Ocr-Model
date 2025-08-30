@@ -51,7 +51,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # Config and environment variables
-API_URL = os.environ.get("CURIOSCAN_API_URL", "http://localhost:8000")
+API_URL = os.environ.get("CURIOSCAN_API_URL", "http://127.0.0.1:8000")
 DEMO_MODE = os.environ.get("DEMO_MODE", "false").lower() == "true"
 MAX_FILE_SIZE_MB = int(os.environ.get("MAX_FILE_SIZE_MB", "50"))
 ENABLE_ANALYTICS = os.environ.get("ENABLE_ANALYTICS", "true").lower() == "true"
@@ -179,7 +179,7 @@ with sidebar:
             options=["Auto", "Force OCR", "Native Text Only", "Legacy"],
             help="Auto: Let system decide best approach\nForce OCR: Always use OCR\nNative Text: Extract embedded text when possible\nLegacy: Use previous OCR engine"
         )
-        
+
         confidence_threshold = st.slider(
             "Confidence Threshold",
             min_value=0.0,
@@ -187,6 +187,22 @@ with sidebar:
             value=0.8,
             step=0.05,
             help="Set minimum confidence threshold for text extraction"
+        )
+
+    with st.expander("Speed / Quality", expanded=True):
+        processing_mode = st.selectbox(
+            "Processing Mode",
+            options=["BASIC", "STANDARD", "ADVANCED"],
+            index=2,
+            help="BASIC: fastest, minimal features; STANDARD: balanced; ADVANCED: full features"
+        )
+        max_pages = st.number_input(
+            "Max Pages (0 = all)",
+            min_value=0,
+            max_value=100,
+            value=3,
+            step=1,
+            help="Limit number of pages processed for speed"
         )
     
     with st.expander("Advanced Features", expanded=False):
@@ -272,13 +288,18 @@ def process_document(file, options):
     try:
         # Start processing timer
         start_time = time.time()
-        
+
         # Show processing status
         with st.status("Processing document...", expanded=True) as status:
             st.write("Uploading file...")
-            
-            # Upload file to API
-            job_id = api_client.upload_file(file, confidence_threshold=options['confidence_threshold'])
+
+            # Upload file to API with mode/max_pages for speed control
+            job_id = api_client.upload_file(
+                file,
+                confidence_threshold=options['confidence_threshold'],
+                mode=options.get('processing_mode', 'STANDARD'),
+                max_pages=options.get('max_pages', 5)
+            )
             st.write(f"Processing job started with ID: {job_id}")
             
             # Monitor processing status
@@ -370,12 +391,14 @@ if uploaded_file is not None:
         'analyze_layout': analyze_layout,
         'detect_language': detect_language,
         'output_formats': [fmt.lower() for fmt in output_formats],
-        'include_provenance': include_provenance
+        'include_provenance': include_provenance,
+        'processing_mode': processing_mode,
+        'max_pages': int(max_pages) if max_pages else 0
     }
-    
+
     # Process the document
     job_id, success = process_document(uploaded_file, processing_options)
-    
+
     if success:
         st.success(f"Document processed successfully! Job ID: {job_id}")
 
@@ -433,12 +456,32 @@ if st.session_state.current_job_id:
                                     except:
                                         pass
                                 
-                                # Display the image with regions
-                                visualize_document_image(
-                                    image_data, 
-                                    regions=page.get("regions", []),
-                                    page_number=i+1
+                                # Overlay toggles
+                                show_ocr = st.checkbox(f"Show OCR boxes (Page {i+1})", value=False, key=f"ocr_{i}")
+                                show_regions = st.checkbox(f"Show Classified Regions (Page {i+1})", value=True, key=f"regions_{i}")
+                                overlay_type = st.selectbox(
+                                    f"Overlay type (Page {i+1})",
+                                    ["bboxes", "tokens", "confidence"],
+                                    index=0,
+                                    key=f"ovtype_{i}"
                                 )
+
+                                # Render image with selected overlays
+                                from streamlit_demo.components.visualization import render_ocr_overlay, render_region_overlays
+                                from PIL import Image
+                                if isinstance(image_data, bytes):
+                                    img = Image.open(io.BytesIO(image_data)).convert("RGB")
+                                elif isinstance(image_data, str):
+                                    img = Image.open(image_data).convert("RGB")
+                                else:
+                                    img = image_data
+
+                                out_img = img
+                                if show_ocr and "ocr_results" in results:
+                                    out_img = render_ocr_overlay(out_img, results.get("ocr_results", {}), overlay_type)
+                                if show_regions and page.get("regions"):
+                                    out_img = render_region_overlays(out_img, page.get("regions", []), show_labels=True)
+                                st.image(out_img, caption=f"Page {i+1}", use_column_width=True)
                             except Exception as e:
                                 st.error(f"Error displaying page {i+1}: {str(e)}")
             

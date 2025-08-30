@@ -12,7 +12,7 @@ import streamlit as st
 class CurioScanAPIClient:
     """Client for interacting with CurioScan API."""
     
-    def __init__(self, base_url: str = "http://localhost:8000"):
+    def __init__(self, base_url: str = "http://127.0.0.1:8000"):
         self.base_url = base_url.rstrip('/')
         self.session = requests.Session()
         self.session.headers.update({
@@ -20,22 +20,24 @@ class CurioScanAPIClient:
             "User-Agent": "CurioScan-Streamlit-Demo/2.0.0"
         })
     
-    def upload_file(self, file, confidence_threshold: float = 0.8) -> str:
+    def upload_file(self, file, confidence_threshold: float = 0.8, mode: str = "STANDARD", max_pages: int = 5) -> str:
         """Upload a file for processing."""
-        
+
         try:
             # Prepare file for upload
             files = {
                 'file': (file.name, file.getvalue(), file.type)
             }
-            
+
             params = {
-                'confidence_threshold': confidence_threshold
+                'confidence_threshold': confidence_threshold,
+                'mode': mode,
+                'max_pages': max_pages
             }
-            
+
             # Remove Content-Type header for file upload
             headers = {k: v for k, v in self.session.headers.items() if k != "Content-Type"}
-            
+
             response = requests.post(
                 f"{self.base_url}/api/v1/upload",
                 files=files,
@@ -43,17 +45,17 @@ class CurioScanAPIClient:
                 headers=headers,
                 timeout=30
             )
-            
+
             response.raise_for_status()
             result = response.json()
-            
+
             return result.get('job_id')
-            
+
         except requests.exceptions.RequestException as e:
             raise Exception(f"Upload failed: {str(e)}")
         except Exception as e:
             raise Exception(f"Unexpected error: {str(e)}")
-    
+
     def get_job_status(self, job_id: str) -> Dict[str, Any]:
         """Get job processing status."""
         

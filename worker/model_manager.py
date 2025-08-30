@@ -6,6 +6,7 @@ Handles loading, caching, and managing ML models for document processing.
 
 import os
 import threading
+import time
 from typing import Dict, Any, Optional
 from pathlib import Path
 
@@ -17,6 +18,12 @@ try:
     import pytesseract
 except ImportError:
     pytesseract = None
+
+# Optional PaddleOCR integration
+try:
+    from paddleocr import PaddleOCR as _PaddleOCR
+except Exception:  # broad: handle missing pkg or runtime issues
+    _PaddleOCR = None
 
 from .utils.logging import get_logger
 
@@ -146,36 +153,37 @@ class ModelManager:
     def _load_ocr_models(self):
         """Load OCR models."""
         try:
-            from models.ocr_models import TesseractOCR, EasyOCR, OCRModelEnsemble
-            
-            
-            tesseract_ocr = TesseractOCR()
-            self.models["tesseract_ocr"] = tesseract_ocr
-            logger.info("Tesseract OCR loaded")
-            
-            
-            if LOAD_EASYOCR:
+            from models.ocr_models import TesseractOCR, PaddleOCRAdapter, OCRModelEnsemble
+
+            # Tesseract
+            try:
+                tesseract_ocr = TesseractOCR()
+                self.models["tesseract_ocr"] = tesseract_ocr
+                logger.info("Tesseract OCR loaded")
+            except Exception as e:
+                logger.warning(f"Tesseract init failed: {e}")
+
+            # PaddleOCR (optional)
+            if _PaddleOCR is not None:
                 try:
-                    easyocr_model = EasyOCR(["en"], gpu=(self.device != "cpu"))
-                    self.models["easyocr"] = easyocr_model
-                    logger.info("EasyOCR loaded")
+                    self.models["paddleocr_adapter"] = PaddleOCRAdapter(lang="en")
+                    logger.info("PaddleOCR adapter loaded")
                 except Exception as e:
-                    logger.warning(f"Failed to load EasyOCR: {str(e)}")
+                    logger.warning(f"Failed to init PaddleOCR adapter: {e}")
             else:
-                logger.info("Skipping EasyOCR per env flag")
-            
-            
-            ocr_models = [self.models.get("tesseract_ocr")]
-            if "easyocr" in self.models:
-                ocr_models.append(self.models["easyocr"])
-            
+                logger.info("PaddleOCR not available (package not installed)")
+
+            # Build ensemble in preferred order
+            ocr_models = [m for m in [self.models.get("paddleocr_adapter"), self.models.get("tesseract_ocr")] if m]
+            if not ocr_models:
+                raise RuntimeError("No OCR engines available")
             ensemble = OCRModelEnsemble(ocr_models)
             self.models["ocr_ensemble"] = ensemble
-            logger.info("OCR ensemble created")
-            
+            logger.info("OCR ensemble created (PaddleOCR,Tesseract)")
+
         except Exception as e:
             logger.error(f"Failed to load OCR models: {str(e)}")
-    
+
     def _load_table_detector(self):
         """Load table detection model."""
         try:
@@ -272,45 +280,70 @@ class ModelManager:
             "confidence": 0.5,
             "method": "fallback"
         }
-    
+
+    def run_ocr(self, image: Image.Image) -> Dict[str, Any]:
+        """Compatibility method used by OCRProcessor to get token results."""
+        return self.extract_text_ocr(image, render_type="auto")
+
     def extract_text_ocr(self, image: Image.Image, render_type: str) -> Dict[str, Any]:
-        """Extract text using OCR models."""
-        
-        if render_type in ["handwritten"]:
-            model_name = "easyocr"
-        else:
-            model_name = "ocr_ensemble"
-        
-        model = self.get_model(model_name)
-        
-        if model is None:
-            
-            model = self.get_model("tesseract_ocr")
-        
+        """Extract text using OCR models with rotation and multi-column handling."""
+
+        # Prefer the ensemble which may include PaddleOCR if available
+        model = self.get_model("ocr_ensemble") or self.get_model("tesseract_ocr")
         if model is None:
             raise RuntimeError("No OCR models available")
-        
-        try:
-            result = model.extract_text(image)
-            return {
-                "tokens": [
-                    {
-                        "text": token.text,
-                        "bbox": token.bbox,
-                        "confidence": token.confidence,
-                        "token_id": token.token_id
-                    }
-                    for token in result.tokens
-                ],
-                "page_bbox": result.page_bbox,
-                "processing_time": result.processing_time,
-                "model_name": result.model_name
-            }
-            
-        except Exception as e:
-            logger.error(f"OCR extraction failed: {str(e)}")
-            raise
-    
+
+        # Basic orientation correction: try 0, 90, 180, 270 and pick best average confidence
+        rotations = [0, 90, 180, 270]
+        best = None
+        for deg in rotations:
+            try:
+                if deg != 0:
+                    img_rot = image.rotate(deg, expand=True) if isinstance(image, Image.Image) else image
+                else:
+                    img_rot = image
+                start = time.time()
+                result = model.extract_text(img_rot)
+                dur = time.time() - start
+                # Compute score: prefer more tokens and higher confidence
+                toks = getattr(result, "tokens", [])
+                if toks:
+                    avg_conf = sum(getattr(t, "confidence", 0.0) for t in toks) / max(1, len(toks))
+                else:
+                    avg_conf = 0.0
+                score = (avg_conf, len(toks))
+                cand = (score, deg, result, dur)
+                if best is None or cand[0] > best[0]:
+                    best = cand
+            except Exception as e:
+                logger.debug(f"Rotation {deg} OCR failed: {e}")
+                continue
+
+        if best is None:
+            raise RuntimeError("OCR failed for all rotations")
+
+        _, best_deg, result, dur = best
+
+        # Optional multi-column heuristic: group tokens by y bands and reorder left-to-right
+        toks = getattr(result, "tokens", [])
+        toks_sorted = sorted(toks, key=lambda t: (t.bbox[1], t.bbox[0])) if toks else []
+
+        return {
+            "tokens": [
+                {
+                    "text": t.text,
+                    "bbox": t.bbox,
+                    "confidence": t.confidence,
+                    "token_id": getattr(t, "token_id", None),
+                }
+                for t in toks_sorted
+            ],
+            "page_bbox": getattr(result, "page_bbox", None),
+            "processing_time": dur,
+            "model_name": getattr(result, "model_name", "ocr_ensemble"),
+            "rotation": best_deg,
+        }
+
     def detect_tables(self, image: Image.Image) -> Dict[str, Any]:
         """Detect tables in the image."""
         model = self.get_model("table_detector")

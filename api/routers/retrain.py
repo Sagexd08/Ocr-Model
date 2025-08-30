@@ -11,8 +11,8 @@ from fastapi import APIRouter, HTTPException, Depends, BackgroundTasks
 from sqlalchemy.orm import Session
 
 from ..config import get_settings
-from ..database import get_db, ModelCheckpoint
-from ..models import RetrainRequest, RetrainResponse
+from ..database import get_db
+from ..models import RetrainRequest, RetrainResponse, ModelCheckpoint
 from ..dependencies import get_current_user
 
 logger = logging.getLogger(__name__)

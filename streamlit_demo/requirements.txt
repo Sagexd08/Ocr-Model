@@ -1,12 +1,8 @@
-# CurioScan Streamlit Demo Requirements - Production Version
-
-# Core Streamlit
 streamlit>=1.35.0
 streamlit-option-menu>=0.3.6
 streamlit-aggrid>=0.3.4
 streamlit-extras>=0.3.6
 
-# Data manipulation and visualization
 pandas>=2.1.0
 numpy>=1.26.0
 plotly>=5.18.0
@@ -14,17 +10,17 @@ openpyxl>=3.1.2  # For Excel support
 
 # Image processing
 Pillow>=10.1.0
-opencv-python-headless>=4.8.0  # Headless version for server deployment
+opencv-python-headless>=4.8.0  
 
 # HTTP requests
 requests>=2.31.0
-httpx>=0.25.0  # Modern HTTP client with async support
+httpx>=0.25.0  
 
 # File handling
 python-multipart>=0.0.9
-python-magic>=0.4.27  # For MIME type detection
+python-magic>=0.4.27  
 
-# Utilities
+
 python-dateutil>=2.8.2
 pytz>=2023.3
 tqdm>=4.66.1  # Progress bars
@@ -34,7 +30,6 @@ pydantic>=2.4.0  # Data validation
 cachetools>=5.3.1
 joblib>=1.3.2
 
-# Production readiness
 watchdog>=3.0.0  # For automatic reloading
 python-dotenv>=1.0.0  # For environment variable management
 tenacity>=8.2.3  # For retrying operations

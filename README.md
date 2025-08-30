@@ -217,3 +217,19 @@ Proprietary - All Rights Reserved
 ## LLM Usage
 
 You are a strict normalizer. Input: OCR tokens with bbox and confidence. Output: JSON matching the schema. Do not invent missing values. If unsure, set needs_review=true. Output JSON only.
+
+
+## Local Run (no Docker)
+
+- Create venv and install deps:
+  - python -m venv .venv
+  - .venv\\Scripts\\pip install -r requirements.txt
+- Initialize SQLite (auto-created on first run):
+  - setx CURIO_TEST_MODE 0
+  - setx DATABASE_URL sqlite+pysqlite:///./curioscan.db
+- Start API:
+  - .venv\\Scripts\\uvicorn api.main:app --reload
+- Health check:
+  - curl http://localhost:8000/health
+- Upload test:
+  - curl -F "file=@tests/data/sample.pdf" http://localhost:8000/upload

@@ -22,6 +22,10 @@ detectron2 @ git+https://github.com/facebookresearch/detectron2.git
 layoutparser>=0.3.4
 easyocr>=1.7.0
 
+
+# Optional high-accuracy OCR (install paddlepaddle separately; see docs/install_paddleocr.md)
+paddleocr>=2.7.0
+
 # API and Web Framework
 fastapi>=0.100.0
 uvicorn[standard]>=0.22.0
