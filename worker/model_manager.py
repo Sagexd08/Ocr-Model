@@ -48,7 +48,7 @@ try:
         LOAD_LAYOUT_ANALYZER
     )
 except ImportError:
-    logger.info("Common feature flags not found, using defaults")
+    logger.debug("Common feature flags not found, using defaults")
 
 
 class ModelManager:
@@ -82,7 +82,7 @@ class ModelManager:
         self.device = self._get_device()
         self._lock = threading.Lock()
         
-        logger.info(f"ModelManager initialized with device: {self.device}")
+        logger.debug(f"ModelManager initialized with device: {self.device}")
     
     def _get_device(self) -> str:
         """Determine the best device for model inference."""

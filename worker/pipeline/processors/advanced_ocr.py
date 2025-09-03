@@ -16,10 +16,6 @@ logger = get_logger(__name__)
 
 
 class AdvancedOCRProcessor:
-    """
-    Ensemble OCR processor that can use PaddleOCR and Tesseract, with room to plug in
-    ONNX or transformer recognizers. Returns standardized results for downstream use.
-    """
 
     def __init__(
         self,
@@ -28,9 +24,17 @@ class AdvancedOCRProcessor:
         model_path: Optional[Union[str, Path]] = None,
         lang: str = "en",
         tesseract_lang: str = "eng",
-        tesseract_config: str = "--oem 1 --psm 6",
+        tesseract_config: str = "--oem 3 --psm 6",
+        preprocess: bool = True,
+        preprocess_method: str = "auto",
     ):
         from models.ocr_models import OCRModelEnsemble, PaddleOCRAdapter, TesseractOCR
+
+        self.preprocess = preprocess
+        self.preprocess_method = preprocess_method
+        self.lang = lang
+        self.tesseract_lang = tesseract_lang
+        self.tesseract_config = tesseract_config
 
         engines: List[Any] = []
         if use_paddle:
@@ -55,15 +59,28 @@ class AdvancedOCRProcessor:
         # path-like
         return Image.open(str(image_path)).convert("RGB")
 
+    def _preprocess_image(self, img: Image.Image, method: str = "auto") -> Image.Image:
+        from PIL import ImageOps, ImageFilter
+        if method in ("auto", "contrast"):
+            img = ImageOps.autocontrast(img)
+        if method in ("auto", "denoise"):
+            img = img.filter(ImageFilter.MedianFilter(size=3))
+        if method in ("auto", "sharpen"):
+            img = img.filter(ImageFilter.UnsharpMask(radius=1, percent=150, threshold=3))
+        return img
+
     def process_image(self, image_path: Union[str, Path, np.ndarray, Image.Image]) -> Dict[str, Any]:
-        """
-        Process a single image for text detection and recognition.
-        Returns: { image_path, image_size, results: [ {box, text, confidence} ] }
-        """
         try:
             img = self._ensure_image(image_path)
         except Exception as e:
             return {"error": f"Failed to load image: {e}"}
+
+        # Optional pre-processing to improve OCR quality
+        if self.preprocess:
+            try:
+                img = self._preprocess_image(img, method=self.preprocess_method)
+            except Exception as e:
+                logger.warning(f"Preprocess skipped: {e}")
 
         res = self.ensemble.extract_text(img)
         # Convert to expected dict format used by PDFProcessor and DocumentProcessor
@@ -86,13 +103,16 @@ class AdvancedOCRProcessor:
         }
 
     def process(self, document: Dict[str, Any]) -> Dict[str, Any]:
-        """Pipeline-compatible: add tokens to the first page image if present in document.pages."""
         from ...types import Document as _Doc, Token as _Token, Bbox as _Bbox
-        if isinstance(document, _Doc) and document.pages:
-            page = document.pages[0]
-            img = page.image
-            if img is not None:
-                res = self.ensemble.extract_text(img)
-                for tok in res.tokens:
-                    page.tokens.append(_Token(text=tok.text, bbox=_Bbox(x1=tok.bbox[0], y1=tok.bbox[1], x2=tok.bbox[2], y2=tok.bbox[3]), confidence=tok.confidence))
+        if isinstance(document, _Doc):
+            for page in document.pages:
+                img = page.image
+                if img is not None:
+                    try:
+                        res = self.ensemble.extract_text(img)
+                        for tok in res.tokens:
+                            page.tokens.append(_Token(text=tok.text, bbox=_Bbox(x1=tok.bbox[0], y1=tok.bbox[1], x2=tok.bbox[2], y2=tok.bbox[3]), confidence=tok.confidence))
+                        logger.info(f"OCR extracted {len(res.tokens)} tokens from page {page.page_num}")
+                    except Exception as e:
+                        logger.error(f"OCR failed on page {page.page_num}: {e}")
         return document

@@ -182,3 +182,21 @@ def is_model_loaded(model_name: str) -> bool:
 def get_loaded_models() -> Dict[str, Any]:
     """Get all loaded models."""
     return _models.copy()
+
+
+def get_document_processor():
+    """Factory for a ready-to-use EnhancedDocumentProcessor.
+
+    Keeps API thin and enables inline processing fallback when Celery is unavailable.
+    """
+    try:
+        from worker.model_manager import ModelManager
+        from worker.storage_manager import StorageManager
+        from worker.document_processor import EnhancedDocumentProcessor
+
+        mm = ModelManager()
+        sm = StorageManager()
+        return EnhancedDocumentProcessor(mm, sm)
+    except Exception as e:
+        logger.error(f"Failed to create document processor: {e}")
+        raise

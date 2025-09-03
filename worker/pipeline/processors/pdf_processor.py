@@ -1,12 +1,8 @@
-"""
-PDF Processor module for extracting text and handling PDF documents.
-Provides specialized processing for both native PDFs and scanned PDF documents.
-"""
 
 import os
 import io
 import cv2
-import fitz  # PyMuPDF
+import fitz
 import numpy as np
 import tempfile
 from pathlib import Path
@@ -19,27 +15,11 @@ logger = get_logger(__name__)
 
 
 class PDFProcessor:
-    """
-    Specialized processor for PDF documents that can:
-    - Extract native text from digital PDFs
-    - Perform OCR on scanned PDFs
-    - Handle hybrid PDFs with both digital and scanned content
-    - Extract and maintain layout information
-    """
 
     def __init__(self,
                  ocr_processor: Optional[AdvancedOCRProcessor] = None,
                  dpi: int = 300,
                  ocr_threshold: float = 0.1):
-        """
-        Initialize the PDF processor.
-
-        Args:
-            ocr_processor: Advanced OCR processor for scanned content
-            dpi: DPI for rendering PDF pages
-            ocr_threshold: Threshold for determining if a page needs OCR
-                           (percentage of text coverage)
-        """
         self.ocr_processor = ocr_processor
         self.dpi = dpi
         self.ocr_threshold = ocr_threshold
@@ -48,41 +28,29 @@ class PDFProcessor:
         """
         Determine if a PDF page is scanned or digital.
 
-        Args:
-            page: PyMuPDF page object
-
-        Returns:
-            True if the page appears to be scanned, False if digital
+        Heuristic: if the page has any extractable spans from PyMuPDF,
+        we treat it as digital; otherwise we fall back to OCR.
         """
-        # Extract text from the page
-        text = page.get_text()
-
-        # Calculate text coverage ratio
-        text_length = len(text.strip())
-        page_area = page.rect.width * page.rect.height
-
-        # Calculate text density (characters per square point)
-        text_density = text_length / page_area if page_area > 0 else 0
-
-        # Check if the page has very little text relative to its size
-        return text_density < self.ocr_threshold
+        try:
+            text_dict = page.get_text("dict")
+            blocks = text_dict.get("blocks", []) if isinstance(text_dict, dict) else []
+            for block in blocks:
+                if block.get("lines"):
+                    for line in block.get("lines", []):
+                        if line.get("spans"):
+                            # Found at least one span -> digital
+                            return False
+            # No spans discovered -> likely scanned
+            return True
+        except Exception:
+            # Safe fallback: if we cannot parse, try OCR
+            return True
 
     def _extract_native_text(self, page) -> Dict[str, Any]:
-        """
-        Extract native text and layout information from a digital PDF page.
-
-        Args:
-            page: PyMuPDF page object
-
-        Returns:
-            Dictionary with extracted text blocks and their positions
-        """
-        # Extract text with layout information
         blocks = page.get_text("dict")["blocks"]
 
         result = []
 
-        # Process text blocks: create a token per span for finer granularity
         for block in blocks:
             if "lines" not in block:
                 continue
@@ -108,36 +76,23 @@ class PDFProcessor:
         return {"blocks": result}
 
     def _process_scanned_page(self, page) -> Dict[str, Any]:
-        """
-        Process a scanned PDF page using OCR.
-
-        Args:
-            page: PyMuPDF page object
-
-        Returns:
-            Dictionary with OCR results
-        """
         if not self.ocr_processor:
             return {"error": "OCR processor not provided for scanned page"}
 
-        # Convert the page to an image
         pix = page.get_pixmap(dpi=self.dpi)
 
-        # Convert pixmap to OpenCV format
         img_bytes = pix.tobytes("png")
         nparr = np.frombuffer(img_bytes, np.uint8)
         img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
 
-        # Save to temporary file for OCR processing
-        with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as temp:
-            temp_path = temp.name
+        temp_path = None
+        try:
+            with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as temp:
+                temp_path = temp.name
             cv2.imwrite(temp_path, img)
 
-        try:
-            # Process with OCR
             ocr_result = self.ocr_processor.process_image(temp_path)
 
-            # Convert OCR results to match native text format
             result = []
             for item in ocr_result.get("results", []):
                 box = item.get("box", [[0, 0], [0, 0], [0, 0], [0, 0]])
@@ -155,45 +110,58 @@ class PDFProcessor:
                     "confidence": item.get("confidence", 0.0)
                 })
 
-
-        def process(self, document: Document) -> Document:
-            """Pipeline-compatible entry: read source path from doc.metadata and populate pages/tokens.
-            This does not perform table extraction; only text/native+OCR and tokenization per page.
-            """
-            src = document.metadata.get("source_path")
-            if not src:
-                logger.warning("PDFProcessor.process called without source_path in document metadata")
-                return document
-            if document.metadata.get("doc_type") != "pdf":
-                # Not a PDF document; no-op
-                return document
-            try:
-                result = self.process_pdf(src)
-                for p in result.get("pages", []):
-                    page = Page(
-                        page_num=p.get("page_num", len(document.pages) + 1),
-                        width=int(p.get("size", {}).get("width", 0) or 0),
-                        height=int(p.get("size", {}).get("height", 0) or 0),
-                    )
-                    # Convert blocks to tokens (roughly per-line bbox as a token)
-                    for blk in p.get("blocks", []):
-                        bbox = blk.get("bbox")
-                        if not bbox:
-                            continue
-                        page.tokens.append(
-                            Token(text=blk.get("text", ""), bbox=Bbox(x1=bbox[0], y1=bbox[1], x2=bbox[2], y2=bbox[3]), confidence=float(blk.get("confidence", 1.0)))
-                        )
-                    document.pages.append(page)
-            except Exception as e:
-                logger.warning(f"PDFProcessor.process failed: {e}")
-            return document
-
             return {"blocks": result}
-
         finally:
             # Clean up temp file
-            if os.path.exists(temp_path):
+            if temp_path and os.path.exists(temp_path):
                 os.unlink(temp_path)
+
+    def process(self, document: Document) -> Document:
+        """Pipeline-compatible entry: read source path from doc.metadata and populate pages/tokens."""
+        src = document.metadata.get("source_path")
+        if not src:
+            logger.warning("PDFProcessor.process called without source_path in document metadata")
+            return document
+        if document.metadata.get("doc_type") != "pdf":
+            return document
+
+        try:
+            result = self.process_pdf(src)
+            for p in result.get("pages", []):
+                page = Page(
+                    page_num=p.get("page_num", len(document.pages) + 1),
+                    width=int(p.get("size", {}).get("width", 0) or 0),
+                    height=int(p.get("size", {}).get("height", 0) or 0),
+                )
+
+                # For scanned pages, create page image for OCR pipeline
+                if p.get("is_scanned", False):
+                    try:
+                        doc = fitz.open(src)
+                        pdf_page = doc[p.get("page_num", 1) - 1]
+                        pix = pdf_page.get_pixmap(dpi=self.dpi)
+                        img_data = pix.tobytes("png")
+                        from PIL import Image
+                        import io
+                        page.image = Image.open(io.BytesIO(img_data)).convert("RGB")
+                        doc.close()
+                        logger.info(f"Created page image for scanned page {page.page_num}")
+                    except Exception as e:
+                        logger.warning(f"Failed to create page image: {e}")
+
+                # Convert blocks to tokens for text-based pages
+                for blk in p.get("blocks", []):
+                    bbox = blk.get("bbox")
+                    if not bbox:
+                        continue
+                    page.tokens.append(
+                        Token(text=blk.get("text", ""), bbox=Bbox(x1=bbox[0], y1=bbox[1], x2=bbox[2], y2=bbox[3]), confidence=float(blk.get("confidence", 1.0)))
+                    )
+                document.pages.append(page)
+
+        except Exception as e:
+            logger.error(f"PDFProcessor.process failed: {e}")
+        return document
 
     def process_pdf(self, pdf_path: Union[str, Path]) -> Dict[str, Any]:
         """
@@ -237,13 +205,23 @@ class PDFProcessor:
                     if self.ocr_processor is None:
                         try:
                             self.ocr_processor = AdvancedOCRProcessor()
-                        except Exception:
+                            logger.info("Initialized AdvancedOCRProcessor for scanned page")
+                        except Exception as e:
+                            logger.error(f"Failed to initialize OCR processor: {e}")
                             self.ocr_processor = None
                     if self.ocr_processor is not None:
-                        page_result.update(self._process_scanned_page(page))
+                        try:
+                            ocr_result = self._process_scanned_page(page)
+                            page_result.update(ocr_result)
+                            logger.info(f"OCR processed page {page_num + 1}, found {len(ocr_result.get('blocks', []))} blocks")
+                        except Exception as e:
+                            logger.error(f"OCR processing failed for page {page_num + 1}: {e}")
+                            # Fallback to native extraction
+                            page_result.update(self._extract_native_text(page))
                     else:
                         # Fallback to native extraction if OCR cannot be initialized
                         page_result.update(self._extract_native_text(page))
+                        logger.warning(f"No OCR processor available for scanned page {page_num + 1}")
                 else:
                     page_result.update(self._extract_native_text(page))
 

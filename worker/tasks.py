@@ -11,11 +11,10 @@ from celery import shared_task
 from celery.exceptions import SoftTimeLimitExceeded
 from celery.utils.log import get_task_logger
 
-from .celery_app import celery_app
+from ..api.celery_app import celery_app
 from .model_manager import ModelManager
 from .storage_manager import StorageManager
-from .document_processor import DocumentProcessor
-from .enhanced_document_processor import EnhancedDocumentProcessor
+from .document_processor import EnhancedDocumentProcessor
 from .types import Document, Page, JobStatus, ProcessingMode
 from ..api.database import SessionLocal
 from ..api import models

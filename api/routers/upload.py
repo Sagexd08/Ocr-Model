@@ -109,7 +109,9 @@ async def upload_file(
             queue_processing_task,
             job_id,
             input_path,
-            confidence_threshold or settings.default_confidence_threshold
+            confidence_threshold or settings.default_confidence_threshold,
+            mode or "ADVANCED",
+            max_pages
         )
 
         logger.info(f"File uploaded successfully for job {job_id}")
@@ -134,32 +136,44 @@ async def upload_file(
 async def queue_processing_task(
     job_id: str,
     input_path: str,
-    confidence_threshold: float
+    confidence_threshold: float,
+    mode: str = "ADVANCED",
+    max_pages: int | None = None,
 ):
-    """Queue the document processing task."""
     try:
-        # Import here to avoid circular imports
-        from ..celery_app import celery_app
-
-        # Queue the processing task (match worker.tasks registered name)
         params = {
-            'mode': (mode or 'STANDARD'),
-            'extract_tables': False,
-            'classify_document': False,
-            'extract_forms': False,
-            'analyze_layout': False,
-            'output_format': 'json',
+            'mode': mode,
+            'extract_tables': True,
+            'classify_document': True,
+            'extract_forms': True,
+            'analyze_layout': True,
+            'export_formats': ["json"],
             'confidence_threshold': confidence_threshold or settings.default_confidence_threshold,
             'fast': True,
-            'max_pages': int(max_pages) if max_pages is not None else 5
+            'max_pages': int(max_pages) if max_pages is not None else 5,
+            'profile': 'performance'
         }
-        task = celery_app.send_task(
-            'process_document',
-            args=[job_id, input_path, params],
-            queue='default'
-        )
+        # Try Celery first; if unavailable, run synchronously as a fallback
+        try:
+            from ..celery_app import celery_app
+            celery_app.send_task(
+                'process_document',
+                args=[job_id, input_path, params],
+                queue='default'
+            )
+            logger.info(f"Queued processing task for job {job_id} via Celery")
+        except Exception as e:
+            logger.warning(f"Celery unavailable, running processing in-background for job {job_id}: {e}")
+            # Inline processing fallback
+            from ..ml_service import get_document_processor
+            processor = get_document_processor()
+            try:
+                processor.process_document(job_id, input_path, params)
+            except Exception as proc_err:
+                logger.error(f"Inline processing failed for job {job_id}: {proc_err}")
+                raise
 
-        logger.info(f"Queued processing task {task.id} for job {job_id}")
+        logger.info(f"Processing task queued or executed for job {job_id}")
 
     except Exception as e:
         logger.error(f"Failed to queue processing task for job {job_id}: {str(e)}")

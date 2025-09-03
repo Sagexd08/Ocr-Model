@@ -73,34 +73,83 @@ class TesseractOCR:
 class PaddleOCRAdapter:
     """Adapter to normalize PaddleOCR outputs to OCRExtractResult interface."""
 
-    def __init__(self, lang: str = "en", use_angle_cls: bool = True):
+    def __init__(self, lang: str = "en", use_textline_orientation: bool = True):
         if _PaddleOCR is None:
             raise RuntimeError("PaddleOCR is not available. Please install paddleocr to use this adapter.")
-        self._ocr = _PaddleOCR(use_angle_cls=use_angle_cls, lang=lang)
+        self._ocr = _PaddleOCR(use_textline_orientation=use_textline_orientation, lang=lang)
 
     def extract_text(self, image: Any) -> OCRExtractResult:
+        # PaddleOCR expects file path or numpy array, not PIL Image
         if isinstance(image, str):
-            img = Image.open(image).convert("RGB")
+            img_input = image  # Use file path directly
         elif isinstance(image, Image.Image):
-            img = image
+            import numpy as np
+            img_input = np.array(image)  # Convert PIL to numpy
         else:
-            img = Image.fromarray(image).convert("RGB")
-        # PaddleOCR returns list of [ [[x,y],...], (text, conf) ] per line
-        result = self._ocr.ocr(img, cls=True)
-        tokens: List[OCRTokenResult] = []
-        # Flatten across batches (Paddle returns list per image)
-        for item in (result[0] if result and isinstance(result, list) else []):
+            img_input = image  # Assume it's already numpy array
+
+        # Use the new predict API
+        try:
+            result = self._ocr.predict(img_input)
+        except Exception:
+            # Fallback to old API without cls parameter
             try:
-                box = item[0]
-                txt = item[1][0]
-                conf = float(item[1][1])
-                xs = [p[0] for p in box]
-                ys = [p[1] for p in box]
-                bbox = [int(min(xs)), int(min(ys)), int(max(xs)), int(max(ys))]
-                tokens.append(OCRTokenResult(text=txt, bbox=bbox, confidence=conf))
-            except Exception:
-                continue
-        return OCRExtractResult(tokens=tokens, page_bbox=[0, 0, img.width, img.height], model_name="paddleocr")
+                result = self._ocr.ocr(img_input)
+            except Exception as e:
+                return OCRExtractResult(tokens=[], model_name="paddleocr_failed")
+
+        tokens: List[OCRTokenResult] = []
+
+        # Handle new PaddleOCR format (returns dict with rec_texts, rec_scores, rec_polys)
+        if result and isinstance(result, list) and len(result) > 0:
+            batch = result[0]
+            if isinstance(batch, dict):
+                # New format: dict with rec_texts, rec_scores, rec_polys
+                texts = batch.get('rec_texts', [])
+                scores = batch.get('rec_scores', [])
+                polys = batch.get('rec_polys', [])
+
+                for i in range(len(texts)):
+                    try:
+                        text = texts[i]
+                        conf = float(scores[i]) if i < len(scores) else 0.0
+                        poly = polys[i] if i < len(polys) else None
+
+                        if poly is not None:
+                            # Convert polygon to bbox
+                            xs = [p[0] for p in poly]
+                            ys = [p[1] for p in poly]
+                            bbox = [int(min(xs)), int(min(ys)), int(max(xs)), int(max(ys))]
+                        else:
+                            bbox = [0, 0, 0, 0]
+
+                        tokens.append(OCRTokenResult(text=text, bbox=bbox, confidence=conf))
+                    except Exception:
+                        continue
+            else:
+                # Old format: list of [box, (text, conf)]
+                for item in batch:
+                    try:
+                        box = item[0]
+                        txt = item[1][0]
+                        conf = float(item[1][1])
+                        xs = [p[0] for p in box]
+                        ys = [p[1] for p in box]
+                        bbox = [int(min(xs)), int(min(ys)), int(max(xs)), int(max(ys))]
+                        tokens.append(OCRTokenResult(text=txt, bbox=bbox, confidence=conf))
+                    except Exception:
+                        continue
+        # Get image dimensions for page_bbox
+        if isinstance(image, str):
+            img = Image.open(image)
+            page_bbox = [0, 0, img.width, img.height]
+        elif isinstance(image, Image.Image):
+            page_bbox = [0, 0, image.width, image.height]
+        else:
+            # Numpy array
+            page_bbox = [0, 0, image.shape[1], image.shape[0]]
+
+        return OCRExtractResult(tokens=tokens, page_bbox=page_bbox, model_name="paddleocr")
 
 
 class OCRModelEnsemble:

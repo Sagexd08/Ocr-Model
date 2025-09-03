@@ -1,0 +1,16 @@
+# Streamlit Web Interface Dependencies
+streamlit>=1.28.0
+plotly>=5.15.0
+pandas>=2.0.0
+
+# Existing OCR System Dependencies (already installed)
+# paddleocr
+# paddlepaddle
+# pillow
+# opencv-python
+# PyMuPDF
+# python-docx
+# pydantic
+# pyyaml
+# numpy
+# scikit-learn

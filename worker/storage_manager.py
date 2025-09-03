@@ -2,6 +2,9 @@
 # from minio import Minio
 from pathlib import Path
 from typing import Optional
+import hashlib
+import json
+import os
 
 
 class StorageManager:
@@ -19,6 +22,26 @@ class StorageManager:
 
     def get_temp_dir(self) -> str:
         return str(self.temp_dir)
+
+    # Content hashing for caching keys
+    def compute_hash(self, data: bytes) -> str:
+        return hashlib.sha256(data).hexdigest()
+
+    def cache_dir_for(self, hash_hex: str) -> Path:
+        d = self.base_dir / "cache" / hash_hex[:2] / hash_hex[2:4] / hash_hex
+        d.mkdir(parents=True, exist_ok=True)
+        return d
+
+    def cache_put(self, hash_hex: str, name: str, payload: bytes) -> str:
+        dirp = self.cache_dir_for(hash_hex)
+        fp = dirp / name
+        with open(fp, "wb") as f:
+            f.write(payload)
+        return str(fp)
+
+    def cache_get(self, hash_hex: str, name: str) -> Optional[str]:
+        fp = self.base_dir / "cache" / hash_hex[:2] / hash_hex[2:4] / hash_hex / name
+        return str(fp) if fp.exists() else None
 
     def get_result_path(self, job_id: str) -> str:
         return str(self.output_dir / job_id)
