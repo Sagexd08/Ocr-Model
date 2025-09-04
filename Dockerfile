@@ -23,7 +23,8 @@ ENV STREAMLIT_THEME_TEXT_COLOR="#FAFAFA"
 # Install system dependencies for OCR and image processing
 RUN apt-get update && apt-get install -y \
     # OpenCV and image processing dependencies
-    libgl1-mesa-glx \
+    libgl1-mesa-dri \
+    libgl1-mesa-dev \
     libglib2.0-0 \
     libsm6 \
     libxext6 \
@@ -42,7 +43,6 @@ RUN apt-get update && apt-get install -y \
     libwebp-dev \
     libopenjp2-7-dev \
     libjpeg62-turbo-dev \
-    libpng16-16 \
     # PDF processing
     poppler-utils \
     libpoppler-cpp-dev \
@@ -81,27 +81,9 @@ COPY requirements.txt requirements_streamlit.txt ./
 # Install Python dependencies in stages for better caching
 RUN pip install --no-cache-dir --upgrade pip setuptools wheel
 
-# Install core dependencies first
-RUN pip install --no-cache-dir \
-    numpy>=1.24.0 \
-    pandas>=2.0.0 \
-    pillow>=10.0.0 \
-    opencv-python>=4.8.0 \
-    streamlit>=1.28.0 \
-    plotly>=5.15.0 \
-    fastapi>=0.100.0 \
-    uvicorn[standard]>=0.22.0
-
-# Install OCR dependencies
-RUN pip install --no-cache-dir \
-    paddlepaddle>=2.5.0 \
-    paddleocr>=2.7.0 \
-    PyMuPDF>=1.23.0 \
-    pdf2image>=1.16.0
-
-# Install remaining dependencies
-RUN pip install --no-cache-dir -r requirements.txt && \
-    pip install --no-cache-dir -r requirements_streamlit.txt
+# Install Python dependencies in optimized order
+RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install --no-cache-dir -r requirements_streamlit.txt
 
 # Copy application code
 COPY . .
@@ -125,9 +107,6 @@ RUN mkdir -p \
 
 # Copy Streamlit configuration
 COPY .streamlit/config.toml .streamlit/config.toml
-
-# Pre-download PaddleOCR models (optional, for faster startup)
-RUN python -c "import paddleocr; paddleocr.PaddleOCR(use_angle_cls=True, lang='en')" || echo "Model download will happen at runtime"
 
 # Switch to non-root user
 USER ocr_user

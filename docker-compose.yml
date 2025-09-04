@@ -1,5 +1,3 @@
-version: '3.8'
-
 services:
   # Enterprise OCR Streamlit Application with Advanced Dark Mode UI
   ocr-app:

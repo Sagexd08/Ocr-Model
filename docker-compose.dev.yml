@@ -1,0 +1,67 @@
+services:
+  # Simplified OCR App for Development
+  ocr-app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: ocr-app-dev
+    ports:
+      - "8505:8505"
+    environment:
+      - PYTHONPATH=/app
+      - PYTHONUNBUFFERED=1
+      - STREAMLIT_SERVER_PORT=8505
+      - STREAMLIT_SERVER_ADDRESS=0.0.0.0
+      - STREAMLIT_SERVER_HEADLESS=true
+      - STREAMLIT_BROWSER_GATHER_USAGE_STATS=false
+      - STREAMLIT_THEME_BASE=dark
+      - STREAMLIT_THEME_PRIMARY_COLOR=#00D4FF
+      - STREAMLIT_THEME_BACKGROUND_COLOR=#0E1117
+      - STREAMLIT_THEME_SECONDARY_BACKGROUND_COLOR=#1E2329
+      - STREAMLIT_THEME_TEXT_COLOR=#FAFAFA
+      - OCR_PROFILE=balanced
+      - LOG_LEVEL=INFO
+    volumes:
+      - ./data:/app/data:rw
+      - ./output:/app/output:rw
+      - ./logs:/app/logs:rw
+      - ./temp:/app/temp:rw
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8505/_stcore/health"]
+      interval: 30s
+      timeout: 30s
+      retries: 3
+      start_period: 60s
+    networks:
+      - ocr-network
+
+  # Redis for caching (optional for dev)
+  redis:
+    image: redis:7-alpine
+    container_name: redis-dev
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data:rw
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    command: >
+      redis-server
+      --appendonly yes
+      --maxmemory 512mb
+      --maxmemory-policy allkeys-lru
+    networks:
+      - ocr-network
+
+volumes:
+  redis_data:
+    driver: local
+
+networks:
+  ocr-network:
+    driver: bridge
