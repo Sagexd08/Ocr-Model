@@ -90,17 +90,40 @@
 4. **Access the web interface**
    Open your browser to: **http://localhost:8505**
 
-### 🐳 Docker Deployment (Optional)
+### 🐳 Docker Deployment (Recommended for Production)
 
+#### Quick Deployment
 ```bash
-# Build and run with Docker
-docker-compose up --build
+# One-command automated deployment
+python deploy-docker.py
 
-# Access services:
-# - Streamlit UI: http://localhost:8501
-# - API: http://localhost:8000/docs
-# - Review UI: http://localhost:3000
+# Or manual deployment
+docker-compose up --build -d
+
+# Development environment
+docker-compose -f docker-compose.dev.yml up --build -d
 ```
+
+#### Access Services
+- **🎨 Streamlit UI**: http://localhost:8505 (Advanced Dark Mode Interface)
+- **🔌 API Documentation**: http://localhost:8001/docs (FastAPI Backend)
+- **🌐 Nginx Proxy**: http://localhost:80 (Production Load Balancer)
+- **🗄️ Redis Cache**: localhost:6379 (Session Management)
+- **🗃️ PostgreSQL**: localhost:5432 (Job Persistence)
+
+#### Testing & Validation
+```bash
+# Run comprehensive test suite
+python docker-test.py
+
+# Check service status
+docker-compose ps
+
+# View logs
+docker-compose logs -f
+```
+
+📚 **Complete Docker Guide**: See [DOCKER_DEPLOYMENT.md](DOCKER_DEPLOYMENT.md) for detailed instructions.
 
 ## 📖 Comprehensive Usage Guide
 
