@@ -1,21 +1,58 @@
 [global]
+# Global configuration for Streamlit
 developmentMode = false
+showErrorDetails = true
+dataFrameSerialization = "legacy"
 
 [server]
-port = 8501
+# Server configuration
+port = 8505
+address = "0.0.0.0"
+headless = true
+runOnSave = false
+allowRunOnSave = false
 enableCORS = false
-enableXsrfProtection = false
+enableXsrfProtection = true
 maxUploadSize = 200
+maxMessageSize = 200
+enableWebsocketCompression = false
+baseUrlPath = ""
 
 [browser]
+# Browser configuration
 gatherUsageStats = false
+serverAddress = "0.0.0.0"
+serverPort = 8505
 
 [theme]
-base = "light"
-primaryColor = "#1f77b4"
-backgroundColor = "#ffffff"
-secondaryBackgroundColor = "#f0f2f6"
-textColor = "#262730"
+# Dark theme configuration
+base = "dark"
+primaryColor = "#00D4FF"
+backgroundColor = "#0E1117"
+secondaryBackgroundColor = "#1E2329"
+textColor = "#FAFAFA"
+font = "sans serif"
+
+[client]
+# Client configuration
+caching = true
+displayEnabled = true
+showErrorDetails = true
+
+[runner]
+# Runner configuration
+magicEnabled = true
+installTracer = false
+fixMatplotlib = true
+postScriptGC = true
+fastReruns = true
+enforceSerializableSessionState = false
 
 [logger]
+# Logging configuration
 level = "info"
+messageFormat = "%(asctime)s %(message)s"
+
+[deprecation]
+# Deprecation warnings
+showPyplotGlobalUse = false

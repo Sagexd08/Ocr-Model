@@ -1,16 +1,36 @@
-# Streamlit Web Interface Dependencies
-streamlit>=1.28.0
-plotly>=5.15.0
-pandas>=2.0.0
+# Enterprise OCR Streamlit Interface Dependencies
 
-# Existing OCR System Dependencies (already installed)
-# paddleocr
-# paddlepaddle
-# pillow
-# opencv-python
-# PyMuPDF
-# python-docx
-# pydantic
-# pyyaml
-# numpy
-# scikit-learn
+# Core Streamlit and Web Interface
+streamlit>=1.28.0,<2.0.0
+plotly>=5.15.0,<6.0.0
+pandas>=2.0.0,<3.0.0
+numpy>=1.24.0,<2.0.0
+
+# Image Processing and Visualization
+Pillow>=10.0.0,<11.0.0
+opencv-python>=4.8.0,<5.0.0
+matplotlib>=3.7.0,<4.0.0
+seaborn>=0.12.0,<1.0.0
+
+# Data Handling and Export
+openpyxl>=3.1.0,<4.0.0
+xlsxwriter>=3.1.0,<4.0.0
+python-multipart>=0.0.6,<1.0.0
+
+# Utilities
+python-dateutil>=2.8.0,<3.0.0
+pytz>=2023.3
+requests>=2.31.0,<3.0.0
+urllib3>=2.0.0,<3.0.0
+
+# Enhanced UI Components
+streamlit-aggrid>=0.3.4,<1.0.0
+streamlit-option-menu>=0.3.6,<1.0.0
+streamlit-extras>=0.3.0,<1.0.0
+streamlit-authenticator>=0.2.3,<1.0.0
+streamlit-lottie>=0.0.5,<1.0.0
+streamlit-card>=0.0.5,<1.0.0
+
+# Additional Visualization
+altair>=5.0.0,<6.0.0
+bokeh>=3.2.0,<4.0.0

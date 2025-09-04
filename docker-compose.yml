@@ -1,0 +1,270 @@
+version: '3.8'
+
+services:
+  # Enterprise OCR Streamlit Application with Advanced Dark Mode UI
+  ocr-app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        - BUILDKIT_INLINE_CACHE=1
+    container_name: enterprise-ocr-app
+    ports:
+      - "8505:8505"
+      - "8000:8000"
+    environment:
+      # Python Configuration
+      - PYTHONPATH=/app
+      - PYTHONUNBUFFERED=1
+
+      # Streamlit Configuration
+      - STREAMLIT_SERVER_PORT=8505
+      - STREAMLIT_SERVER_ADDRESS=0.0.0.0
+      - STREAMLIT_SERVER_HEADLESS=true
+      - STREAMLIT_BROWSER_GATHER_USAGE_STATS=false
+      - STREAMLIT_THEME_BASE=dark
+      - STREAMLIT_THEME_PRIMARY_COLOR=#00D4FF
+      - STREAMLIT_THEME_BACKGROUND_COLOR=#0E1117
+      - STREAMLIT_THEME_SECONDARY_BACKGROUND_COLOR=#1E2329
+      - STREAMLIT_THEME_TEXT_COLOR=#FAFAFA
+
+      # OCR System Configuration
+      - OCR_PROFILE=balanced
+      - LOG_LEVEL=INFO
+      - MAX_UPLOAD_SIZE=200
+      - CACHE_ENABLED=true
+      - PROCESSING_TIMEOUT=600
+
+      # Database and Cache Configuration
+      - REDIS_URL=redis://redis:6379
+      - DATABASE_URL=postgresql://ocr_user:ocr_password@postgres:5432/ocr_system
+
+      # Security Configuration
+      - STREAMLIT_SERVER_ENABLE_CORS=false
+      - STREAMLIT_SERVER_ENABLE_XSRF_PROTECTION=true
+
+      # Performance Configuration
+      - STREAMLIT_SERVER_MAX_UPLOAD_SIZE=200
+      - STREAMLIT_SERVER_MAX_MESSAGE_SIZE=200
+      - STREAMLIT_RUNNER_FAST_RERUNS=true
+      - STREAMLIT_RUNNER_POST_SCRIPT_GC=true
+    volumes:
+      - ./data:/app/data:rw
+      - ./output:/app/output:rw
+      - ./logs:/app/logs:rw
+      - ./temp:/app/temp:rw
+      - ocr_models:/home/ocr_user/.paddlex:rw
+      - ocr_cache:/home/ocr_user/.cache:rw
+    depends_on:
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8505/_stcore/health"]
+      interval: 30s
+      timeout: 30s
+      retries: 3
+      start_period: 120s
+    deploy:
+      resources:
+        limits:
+          memory: 8G
+          cpus: '4.0'
+        reservations:
+          memory: 4G
+          cpus: '2.0'
+    networks:
+      - ocr-network
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # FastAPI Backend (Optional - for API-only access)
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: enterprise-ocr-api
+    command: ["uvicorn", "api.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
+    ports:
+      - "8001:8000"
+    environment:
+      - PYTHONPATH=/app
+      - PYTHONUNBUFFERED=1
+      - REDIS_URL=redis://redis:6379
+      - DATABASE_URL=postgresql://ocr_user:ocr_password@postgres:5432/ocr_system
+      - LOG_LEVEL=INFO
+      - OCR_PROFILE=balanced
+      - MAX_UPLOAD_SIZE=200
+    volumes:
+      - ./data:/app/data:rw
+      - ./output:/app/output:rw
+      - ./logs:/app/logs:rw
+      - ocr_models:/home/ocr_user/.paddlex:rw
+      - ocr_cache:/home/ocr_user/.cache:rw
+    depends_on:
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    networks:
+      - ocr-network
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # Redis for caching, session management, and job queuing
+  redis:
+    image: redis:7-alpine
+    container_name: enterprise-ocr-redis
+    ports:
+      - "6379:6379"
+    environment:
+      - REDIS_REPLICATION_MODE=master
+      - REDIS_PASSWORD=redis_password
+    volumes:
+      - redis_data:/data:rw
+      - ./redis.conf:/usr/local/etc/redis/redis.conf:ro
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "--raw", "incr", "ping"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    command: >
+      redis-server
+      --appendonly yes
+      --maxmemory 1gb
+      --maxmemory-policy allkeys-lru
+      --save 900 1
+      --save 300 10
+      --save 60 10000
+      --tcp-keepalive 60
+      --timeout 300
+    networks:
+      - ocr-network
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "5m"
+        max-file: "3"
+
+  # PostgreSQL Database for job management, analytics, and user sessions
+  postgres:
+    image: postgres:15-alpine
+    container_name: enterprise-ocr-postgres
+    environment:
+      POSTGRES_DB: ocr_system
+      POSTGRES_USER: ocr_user
+      POSTGRES_PASSWORD: ocr_password
+      POSTGRES_INITDB_ARGS: "--encoding=UTF-8 --lc-collate=C --lc-ctype=C"
+      PGDATA: /var/lib/postgresql/data/pgdata
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data:rw
+      - ./scripts/init_db.sql:/docker-entrypoint-initdb.d/init.sql:ro
+      - ./postgres.conf:/etc/postgresql/postgresql.conf:ro
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ocr_user -d ocr_system"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    command: >
+      postgres
+      -c shared_preload_libraries=pg_stat_statements
+      -c max_connections=200
+      -c shared_buffers=256MB
+      -c effective_cache_size=1GB
+      -c maintenance_work_mem=64MB
+      -c checkpoint_completion_target=0.9
+      -c wal_buffers=16MB
+      -c default_statistics_target=100
+    networks:
+      - ocr-network
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # Nginx reverse proxy (Optional - for production)
+  nginx:
+    image: nginx:alpine
+    container_name: enterprise-ocr-nginx
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./nginx/ssl:/etc/nginx/ssl:ro
+      - ./nginx/logs:/var/log/nginx:rw
+    depends_on:
+      - ocr-app
+      - api
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    networks:
+      - ocr-network
+    profiles:
+      - production
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "5m"
+        max-file: "3"
+
+volumes:
+  redis_data:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: ./data/redis
+  postgres_data:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: ./data/postgres
+  ocr_models:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: ./data/models
+  ocr_cache:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: ./data/cache
+
+networks:
+  ocr-network:
+    driver: bridge
+    ipam:
+      driver: default
+      config:
+        - subnet: 172.20.0.0/16
+          gateway: 172.20.0.1

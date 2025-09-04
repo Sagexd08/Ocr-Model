@@ -1,3 +1,5 @@
+# Enterprise OCR Processing System - Complete Dependencies
+
 # Core ML and Deep Learning
 torch>=2.0.0
 torchvision>=0.15.0
@@ -16,14 +18,14 @@ pdfminer.six>=20221105
 python-docx>=0.8.11
 openpyxl>=3.1.0
 xlsxwriter>=3.1.0
+PyMuPDF>=1.23.0
 
 # Computer Vision and Layout Analysis
-detectron2 @ git+https://github.com/facebookresearch/detectron2.git
-layoutparser>=0.3.4
 easyocr>=1.7.0
+layoutparser>=0.3.4
 
-
-# Optional high-accuracy OCR (install paddlepaddle separately; see docs/install_paddleocr.md)
+# PaddleOCR for high-accuracy OCR processing
+paddlepaddle>=2.5.0
 paddleocr>=2.7.0
 
 # API and Web Framework
@@ -31,6 +33,7 @@ fastapi>=0.100.0
 uvicorn[standard]>=0.22.0
 pydantic>=2.0.0
 python-multipart>=0.0.6
+httpx>=0.24.0
 aiofiles>=23.0.0
 
 # Task Queue and Caching
@@ -45,17 +48,17 @@ boto3>=1.28.0
 minio>=7.1.0
 
 # Streamlit and UI
-streamlit>=1.25.0
+streamlit>=1.28.0
 plotly>=5.15.0
-altair>=5.0.0
-streamlit-aggrid>=0.3.4
-streamlit-option-menu>=0.3.6
+matplotlib>=3.7.0
+seaborn>=0.12.0
 
-# Data Processing and Analysis
+# Data Science and ML
 pandas>=2.0.0
 numpy>=1.24.0
-scipy>=1.10.0
 scikit-learn>=1.3.0
+scipy>=1.11.0
+joblib>=1.3.0
 scikit-image>=0.21.0
 
 # Monitoring and Logging
@@ -69,47 +72,33 @@ python-dotenv>=1.0.0
 click>=8.1.0
 tqdm>=4.65.0
 requests>=2.31.0
+python-dateutil>=2.8.2
+pytz>=2023.3
+urllib3>=2.0.0
 
-
-# Kaggle API (optional)
-kaggle>=1.6.14
-
-kagglehub>=0.2.5
+# Development and Testing
+pytest>=7.4.0
+pytest-asyncio>=0.21.0
+pytest-cov>=4.1.0
+black>=23.7.0
+isort>=5.12.0
+flake8>=6.0.0
 
 # Training and Optimization
 optuna>=3.2.0
 wandb>=0.15.0
-tensorboard>=2.13.0
 
-# Model Export and Optimization
-onnx>=1.14.0
-onnxruntime>=1.15.0
+# Additional ML Libraries
+xgboost>=1.7.0
+lightgbm>=4.0.0
 
-# Testing
-pytest>=7.4.0
-pytest-asyncio>=0.21.0
-pytest-cov>=4.1.0
-httpx>=0.24.0
+# Text Processing
+nltk>=3.8.0
+spacy>=3.6.0
 
-# Development Tools
-black>=23.0.0
-isort>=5.12.0
-flake8>=6.0.0
-mypy>=1.4.0
+# Visualization
+bokeh>=3.2.0
 
-# Security and Authentication
-python-jose[cryptography]>=3.3.0
-passlib[bcrypt]>=1.7.4
-python-multipart>=0.0.6
-
-# Image Processing and Augmentation
-albumentations>=1.3.0
-imgaug>=0.4.0
-
-# Distributed Training
-deepspeed>=0.9.0
-
-# Optional Cloud Services (disabled by default)
-# google-cloud-vision>=3.4.0
-# azure-cognitiveservices-vision-computervision>=0.9.0
-# aws-textract-caller>=0.0.27
+# Kaggle API
+kaggle>=1.6.14
+kagglehub>=0.2.5

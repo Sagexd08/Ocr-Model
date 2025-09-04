@@ -33,94 +33,358 @@ try:
     from worker.document_processor import EnhancedDocumentProcessor
     from worker.types import ProcessingMode, JobStatus
     OCR_AVAILABLE = True
+    OCR_ERROR = None
 except ImportError as e:
-    st.error(f"OCR System not available: {e}")
     OCR_AVAILABLE = False
+    OCR_ERROR = str(e)
+    # Create dummy classes for development
+    class ModelManager:
+        def __init__(self): pass
+        def initialize_models(self): return True
 
-# Advanced page configuration
+    class StorageManager:
+        def __init__(self): pass
+
+    class EnhancedDocumentProcessor:
+        def __init__(self, *args): pass
+        def process_document(self, *args, **kwargs):
+            return {"status": "error", "message": "OCR system not available"}
+
+    class ProcessingMode:
+        FAST = "fast"
+        STANDARD = "standard"
+        ADVANCED = "advanced"
+
+    class JobStatus:
+        PENDING = "pending"
+        PROCESSING = "processing"
+        COMPLETED = "completed"
+        FAILED = "failed"
+
+# Enhanced page configuration with dark theme
 st.set_page_config(
-    page_title="Advanced OCR Processing System",
+    page_title="🔍 Enterprise OCR Processing System",
     page_icon="🔍",
     layout="wide",
     initial_sidebar_state="expanded",
     menu_items={
-        'Get Help': 'https://docs.ocr-system.com',
-        'Report a bug': 'https://github.com/ocr-system/issues',
-        'About': "Advanced OCR Document Processing System v2.0 - Enterprise Edition"
+        'Get Help': 'https://github.com/Sagexd08/Ocr-Model',
+        'Report a bug': "https://github.com/Sagexd08/Ocr-Model/issues",
+        'About': "# 🔍 Enterprise OCR Processing System v2.0\n\n**Advanced AI-Powered Document Processing**\n\nFeatures:\n- PaddleOCR Integration\n- Real-time Analytics\n- Multiple Export Formats\n- Professional Dark Mode UI\n\nBuilt with ❤️ by the OCR Community"
     }
 )
 
-# Advanced CSS styling
-st.markdown("""
-<style>
+# Enhanced Dark Mode CSS Styling
+def load_custom_css():
+    st.markdown("""
+    <style>
+    /* Import Google Fonts */
+    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
+
+    /* Root Variables for Dark Theme */
+    :root {
+        --primary-color: #00D4FF;
+        --secondary-color: #FF6B6B;
+        --accent-color: #4ECDC4;
+        --success-color: #45B7D1;
+        --warning-color: #FFA726;
+        --error-color: #EF5350;
+        --background-dark: #0E1117;
+        --surface-dark: #1E2329;
+        --surface-light: #262730;
+        --text-primary: #FAFAFA;
+        --text-secondary: #B0B3B8;
+        --border-color: #30363D;
+        --gradient-primary: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        --gradient-secondary: linear-gradient(135deg, #f093fb 0%, #f5576c 100%);
+        --gradient-accent: linear-gradient(135deg, #4facfe 0%, #00f2fe 100%);
+        --gradient-success: linear-gradient(135deg, #11998e 0%, #38ef7d 100%);
+        --gradient-warning: linear-gradient(135deg, #fc4a1a 0%, #f7b733 100%);
+        --gradient-error: linear-gradient(135deg, #fa709a 0%, #fee140 100%);
+    }
+
+    /* Main App Styling */
+    .stApp {
+        background: var(--background-dark);
+        font-family: 'Inter', sans-serif;
+        color: var(--text-primary);
+    }
+
+    /* Header Styling */
     .main-header {
+        background: var(--gradient-primary);
+        padding: 2rem;
+        border-radius: 15px;
+        margin-bottom: 2rem;
+        text-align: center;
+        box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
+        backdrop-filter: blur(10px);
+    }
+
+    .main-header h1 {
+        color: white;
         font-size: 3.5rem;
-        font-weight: bold;
-        background: linear-gradient(90deg, #1f77b4, #ff7f0e, #2ca02c);
+        font-weight: 700;
+        margin: 0;
+        text-shadow: 2px 2px 4px rgba(0, 0, 0, 0.3);
+        background: linear-gradient(45deg, #fff, #e0e0e0);
         -webkit-background-clip: text;
         -webkit-text-fill-color: transparent;
-        text-align: center;
-        margin-bottom: 2rem;
-        animation: gradient 3s ease-in-out infinite;
+        background-clip: text;
+        animation: gradient-shift 3s ease-in-out infinite;
     }
+
+    @keyframes gradient-shift {
+        0%, 100% { background-position: 0% 50%; }
+        50% { background-position: 100% 50%; }
+    }
+
+    .main-header p {
+        color: rgba(255, 255, 255, 0.9);
+        font-size: 1.2rem;
+        margin: 0.5rem 0 0 0;
+        font-weight: 400;
+    }
+
+    /* Sidebar Styling */
+    .css-1d391kg {
+        background: var(--surface-dark);
+        border-right: 2px solid var(--border-color);
+    }
+
+    /* Card Components */
     .metric-card {
-        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        background: var(--surface-light);
         padding: 1.5rem;
-        border-radius: 1rem;
-        color: white;
-        box-shadow: 0 8px 32px rgba(0,0,0,0.1);
-        margin: 0.5rem 0;
+        border-radius: 12px;
+        border: 1px solid var(--border-color);
+        margin: 1rem 0;
+        box-shadow: 0 4px 16px rgba(0, 0, 0, 0.2);
+        transition: transform 0.3s ease, box-shadow 0.3s ease;
+        color: var(--text-primary);
     }
+
+    .metric-card:hover {
+        transform: translateY(-2px);
+        box-shadow: 0 8px 24px rgba(0, 0, 0, 0.3);
+        border-color: var(--primary-color);
+    }
+
+    .status-card {
+        background: var(--gradient-accent);
+        padding: 1rem;
+        border-radius: 10px;
+        color: white;
+        text-align: center;
+        margin: 1rem 0;
+        font-weight: 600;
+        box-shadow: 0 4px 16px rgba(0, 212, 255, 0.3);
+    }
+
     .success-box {
-        background: linear-gradient(135deg, #4facfe 0%, #00f2fe 100%);
-        border-radius: 1rem;
+        background: var(--gradient-success);
         padding: 1.5rem;
+        border-radius: 12px;
         color: white;
         margin: 1rem 0;
-        box-shadow: 0 4px 15px rgba(79, 172, 254, 0.3);
+        font-weight: 600;
+        box-shadow: 0 4px 16px rgba(17, 153, 142, 0.3);
     }
+
     .error-box {
-        background: linear-gradient(135deg, #fa709a 0%, #fee140 100%);
-        border-radius: 1rem;
+        background: var(--gradient-error);
         padding: 1.5rem;
+        border-radius: 12px;
         color: white;
         margin: 1rem 0;
-        box-shadow: 0 4px 15px rgba(250, 112, 154, 0.3);
+        font-weight: 600;
+        box-shadow: 0 4px 16px rgba(250, 112, 154, 0.3);
     }
+
     .processing-card {
-        background: linear-gradient(135deg, #a8edea 0%, #fed6e3 100%);
-        border-radius: 1rem;
+        background: var(--gradient-accent);
+        border-radius: 12px;
         padding: 2rem;
         margin: 1rem 0;
-        box-shadow: 0 4px 15px rgba(168, 237, 234, 0.3);
+        color: white;
+        box-shadow: 0 4px 16px rgba(79, 172, 254, 0.3);
+        text-align: center;
     }
-    .stTabs [data-baseweb="tab-list"] {
-        gap: 2rem;
+
+    .warning-card {
+        background: var(--gradient-warning);
+        padding: 1rem;
+        border-radius: 10px;
+        color: white;
+        text-align: center;
+        margin: 1rem 0;
+        font-weight: 600;
+        box-shadow: 0 4px 16px rgba(252, 74, 26, 0.3);
     }
-    .stTabs [data-baseweb="tab"] {
-        height: 3rem;
-        padding: 0 2rem;
-        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-        border-radius: 1rem;
+
+    /* Button Styling */
+    .stButton > button {
+        background: var(--gradient-primary);
         color: white;
         border: none;
+        border-radius: 8px;
+        padding: 0.75rem 2rem;
+        font-weight: 600;
+        font-size: 1rem;
+        transition: all 0.3s ease;
+        box-shadow: 0 4px 16px rgba(102, 126, 234, 0.3);
+        font-family: 'Inter', sans-serif;
     }
+
+    .stButton > button:hover {
+        transform: translateY(-2px);
+        box-shadow: 0 8px 24px rgba(102, 126, 234, 0.4);
+        background: var(--gradient-accent);
+    }
+
+    .stButton > button:active {
+        transform: translateY(0);
+    }
+
+    /* Progress Bar Styling */
+    .stProgress > div > div > div > div {
+        background: var(--gradient-accent);
+        border-radius: 10px;
+    }
+
+    /* Tab Styling */
+    .stTabs [data-baseweb="tab-list"] {
+        gap: 8px;
+        background: var(--surface-dark);
+        border-radius: 12px;
+        padding: 0.5rem;
+    }
+
+    .stTabs [data-baseweb="tab"] {
+        background: transparent;
+        border-radius: 8px;
+        color: var(--text-secondary);
+        font-weight: 500;
+        padding: 0.75rem 1.5rem;
+        transition: all 0.3s ease;
+        border: none;
+        height: auto;
+    }
+
+    .stTabs [aria-selected="true"] {
+        background: var(--gradient-primary);
+        color: white;
+        box-shadow: 0 4px 16px rgba(102, 126, 234, 0.3);
+    }
+
+    /* Upload Area Styling */
     .upload-area {
-        border: 3px dashed #1f77b4;
-        border-radius: 1rem;
+        border: 2px dashed var(--primary-color);
+        border-radius: 12px;
         padding: 2rem;
         text-align: center;
-        background: linear-gradient(135deg, #f5f7fa 0%, #c3cfe2 100%);
+        background: var(--surface-light);
         margin: 1rem 0;
+        transition: all 0.3s ease;
+        color: var(--text-primary);
     }
+
+    .upload-area:hover {
+        border-color: var(--accent-color);
+        background: var(--surface-dark);
+    }
+
+    /* Stats Container */
     .stats-container {
-        background: linear-gradient(135deg, #ffecd2 0%, #fcb69f 100%);
-        border-radius: 1rem;
+        background: var(--surface-light);
+        border-radius: 12px;
         padding: 1.5rem;
         margin: 1rem 0;
+        border: 1px solid var(--border-color);
+        box-shadow: 0 4px 16px rgba(0, 0, 0, 0.2);
     }
-</style>
-""", unsafe_allow_html=True)
+
+    /* Loading Animation */
+    .loading-spinner {
+        display: inline-block;
+        width: 20px;
+        height: 20px;
+        border: 3px solid var(--border-color);
+        border-radius: 50%;
+        border-top-color: var(--primary-color);
+        animation: spin 1s ease-in-out infinite;
+    }
+
+    @keyframes spin {
+        to { transform: rotate(360deg); }
+    }
+
+    /* Metrics Styling */
+    .metric-container {
+        display: flex;
+        justify-content: space-around;
+        margin: 2rem 0;
+        flex-wrap: wrap;
+        gap: 1rem;
+    }
+
+    .metric-item {
+        text-align: center;
+        padding: 1rem;
+        background: var(--surface-light);
+        border-radius: 12px;
+        border: 1px solid var(--border-color);
+        min-width: 150px;
+        box-shadow: 0 4px 16px rgba(0, 0, 0, 0.2);
+        transition: transform 0.3s ease;
+    }
+
+    .metric-item:hover {
+        transform: translateY(-2px);
+        border-color: var(--primary-color);
+    }
+
+    .metric-value {
+        font-size: 2rem;
+        font-weight: 700;
+        color: var(--primary-color);
+        margin: 0;
+    }
+
+    .metric-label {
+        font-size: 0.9rem;
+        color: var(--text-secondary);
+        margin: 0.5rem 0 0 0;
+        font-weight: 500;
+    }
+
+    /* Hide Streamlit Branding */
+    #MainMenu {visibility: hidden;}
+    footer {visibility: hidden;}
+    header {visibility: hidden;}
+
+    /* Custom Scrollbar */
+    ::-webkit-scrollbar {
+        width: 8px;
+    }
+
+    ::-webkit-scrollbar-track {
+        background: var(--surface-dark);
+    }
+
+    ::-webkit-scrollbar-thumb {
+        background: var(--primary-color);
+        border-radius: 4px;
+    }
+
+    ::-webkit-scrollbar-thumb:hover {
+        background: var(--accent-color);
+    }
+    </style>
+    """, unsafe_allow_html=True)
+
+# Load the custom CSS
+load_custom_css()
 
 # Initialize session state with comprehensive tracking
 if 'processor' not in st.session_state:
@@ -879,9 +1143,19 @@ def display_system_dashboard():
 def main():
     """Main application interface with advanced features"""
 
-    # Header with gradient styling
-    st.markdown('<h1 class="main-header">🔍 Advanced OCR Processing System</h1>', unsafe_allow_html=True)
-    st.markdown("### Enterprise-Grade Document Processing with AI-Powered Analytics")
+    # Enhanced Header with Dark Mode Styling
+    st.markdown("""
+    <div class="main-header">
+        <h1>🔍 Enterprise OCR Processing System</h1>
+        <p>Advanced AI-Powered Document Processing with Real-time Analytics</p>
+    </div>
+    """, unsafe_allow_html=True)
+
+    # System Status Indicator
+    if OCR_AVAILABLE:
+        st.markdown('<div class="success-box">✅ OCR System Active - Ready for Processing</div>', unsafe_allow_html=True)
+    else:
+        st.markdown(f'<div class="error-box">❌ OCR System Error: {OCR_ERROR}</div>', unsafe_allow_html=True)
 
     # Sidebar with advanced settings
     with st.sidebar:
